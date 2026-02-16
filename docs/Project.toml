@@ -1,0 +1,9 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+ERGM = "c3d4e5f6-a7b8-9012-cdef-345678901234"
+
+[sources]
+ERGM = {path = "/home/simon/githubRepos/sna/ERGM"}
+
+[compat]
+Documenter = "1"

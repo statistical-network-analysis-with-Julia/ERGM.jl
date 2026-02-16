@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="95" fill="#2d2d2d" stroke="#4063d8" stroke-width="3"/>
+
+  <!-- Network nodes -->
+  <circle cx="100" cy="45" r="12" fill="#4063d8"/>
+  <circle cx="55" cy="100" r="12" fill="#389826"/>
+  <circle cx="145" cy="100" r="12" fill="#389826"/>
+  <circle cx="70" cy="155" r="12" fill="#cb3c33"/>
+  <circle cx="130" cy="155" r="12" fill="#cb3c33"/>
+
+  <!-- Network edges (triangle + star pattern) -->
+  <line x1="100" y1="45" x2="55" y2="100" stroke="#9558b2" stroke-width="2.5" opacity="0.8"/>
+  <line x1="100" y1="45" x2="145" y2="100" stroke="#9558b2" stroke-width="2.5" opacity="0.8"/>
+  <line x1="55" y1="100" x2="145" y2="100" stroke="#9558b2" stroke-width="2.5" opacity="0.8"/>
+  <line x1="55" y1="100" x2="70" y2="155" stroke="#9558b2" stroke-width="2.5" opacity="0.8"/>
+  <line x1="145" y1="100" x2="130" y2="155" stroke="#9558b2" stroke-width="2.5" opacity="0.8"/>
+  <line x1="70" y1="155" x2="130" y2="155" stroke="#9558b2" stroke-width="2.5" opacity="0.8"/>
+
+  <!-- Dashed potential edge -->
+  <line x1="100" y1="45" x2="70" y2="155" stroke="#9558b2" stroke-width="1.5" stroke-dasharray="5,4" opacity="0.4"/>
+  <line x1="100" y1="45" x2="130" y2="155" stroke="#9558b2" stroke-width="1.5" stroke-dasharray="5,4" opacity="0.4"/>
+</svg>
