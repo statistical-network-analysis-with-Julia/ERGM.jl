@@ -21,6 +21,7 @@ using StatsBase
 # Core types
 export AbstractERGMTerm, ERGMFormula, ERGMModel, ERGMResult
 export TermSet
+export compute, compute_all
 
 # Built-in terms
 export Edges, Mutual, Triangle, Kstar, TwoPath

@@ -101,11 +101,11 @@ function mple(model::ERGMModel{T}; verbose::Bool=false) where T
     H = X' * (W .* X)
 
     # Standard errors
-    try
+    std_errors = try
         var_cov = inv(H)
-        std_errors = sqrt.(diag(var_cov))
+        sqrt.(diag(var_cov))
     catch
-        std_errors = fill(NaN, p)
+        fill(NaN, p)
     end
 
     # Z-values and p-values

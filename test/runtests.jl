@@ -4,7 +4,7 @@ using Test
 
 @testset "ERGM.jl" begin
     @testset "Edges Term" begin
-        net = Network(5)
+        net = network(5)
         add_edge!(net, 1, 2)
         add_edge!(net, 2, 3)
         add_edge!(net, 3, 4)
@@ -20,7 +20,7 @@ using Test
     end
 
     @testset "Mutual Term" begin
-        net = Network(3)
+        net = network(3)
         add_edge!(net, 1, 2)
         add_edge!(net, 2, 1)  # Mutual
         add_edge!(net, 2, 3)  # Asymmetric
@@ -36,7 +36,7 @@ using Test
     end
 
     @testset "Triangle Term" begin
-        net = Network(4; directed=false)
+        net = network(4; directed=false)
         add_edge!(net, 1, 2)
         add_edge!(net, 2, 3)
         add_edge!(net, 1, 3)  # Complete triangle
@@ -51,7 +51,7 @@ using Test
     end
 
     @testset "NodeMatch Term" begin
-        net = Network(4)
+        net = network(4)
         add_edge!(net, 1, 2)
         add_edge!(net, 2, 3)
         add_edge!(net, 3, 4)
@@ -69,7 +69,7 @@ using Test
 
     @testset "MPLE Estimation" begin
         # Create a simple network
-        net = Network(10; directed=false)
+        net = network(10; directed=false)
         for i in 1:9
             add_edge!(net, i, i+1)
         end
@@ -84,7 +84,7 @@ using Test
     end
 
     @testset "Network Simulation" begin
-        net = Network(5)
+        net = network(5)
         add_edge!(net, 1, 2)
         add_edge!(net, 2, 3)
 
@@ -99,7 +99,7 @@ using Test
     end
 
     @testset "GOF" begin
-        net = Network(5; directed=false)
+        net = network(5; directed=false)
         add_edge!(net, 1, 2)
         add_edge!(net, 2, 3)
         add_edge!(net, 3, 4)
@@ -119,7 +119,7 @@ using Test
         @test length(ts) == 3
         @test ts.names == ["edges", "mutual", "triangle"]
 
-        net = Network(3)
+        net = network(3)
         add_edge!(net, 1, 2)
         add_edge!(net, 2, 1)
 

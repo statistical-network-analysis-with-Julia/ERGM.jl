@@ -91,10 +91,10 @@ function mcmle(model::ERGMModel{T};
     cov_stats = cov(final_samples)
 
     # Standard errors from inverse Fisher information
-    try
-        std_errors = sqrt.(diag(inv(cov_stats)))
+    std_errors = try
+        sqrt.(diag(inv(cov_stats)))
     catch
-        std_errors = fill(NaN, p)
+        fill(NaN, p)
     end
 
     z_values = θ ./ std_errors
