@@ -36,9 +36,14 @@ function compute(term::EdgeCov, net)
 end
 
 function change_stat(term::EdgeCov, net, i::Int, j::Int)
-    has_ij = has_edge(net, i, j)
-    delta = term.covariate[i, j]
-    return has_ij ? -delta : delta
+    # Add-direction change: adding edge (i,j) contributes its covariate value.
+    # Undirected edges are keyed by their canonical (min, max) orientation,
+    # matching how compute() iterates edges.
+    if is_directed(net)
+        return term.covariate[i, j]
+    else
+        return term.covariate[min(i, j), max(i, j)]
+    end
 end
 
 """

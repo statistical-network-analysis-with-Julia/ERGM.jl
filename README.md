@@ -5,7 +5,7 @@
 [![Build Status](https://github.com/statistical-network-analysis-with-Julia/ERGM.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/statistical-network-analysis-with-Julia/ERGM.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://statistical-network-analysis-with-Julia.github.io/ERGM.jl/stable/)
 [![Documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://statistical-network-analysis-with-Julia.github.io/ERGM.jl/dev/)
-[![Julia](https://img.shields.io/badge/Julia-1.9+-purple.svg)](https://julialang.org/)
+[![Julia](https://img.shields.io/badge/Julia-1.12+-purple.svg)](https://julialang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 <p align="center">
@@ -22,8 +22,13 @@ This package is a Julia port of the R `ergm` package from the StatNet collection
 
 ## Installation
 
+Requires Julia 1.12+. ERGM.jl depends on the unregistered
+[Network.jl](https://github.com/statistical-network-analysis-with-Julia/Network.jl)
+package, which must be added first:
+
 ```julia
 using Pkg
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl")
 Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl")
 ```
 
@@ -93,7 +98,7 @@ result = ergm(net, terms; method=:mple)
 
 # Monte Carlo MLE (slower, exact)
 result = ergm(net, terms; method=:mcmle,
-              mcmc_burnin=10000, mcmc_interval=1000)
+              burnin=10000, interval=1000)
 
 # Access results
 coef(result)         # Coefficients
@@ -107,15 +112,16 @@ stderror(result)     # Standard errors
 sim_nets = simulate_ergm(result; n_sim=100)
 
 # Simulate from parameters directly
-sim_nets = sample_networks(net, terms, coef;
-                           n_samples=100, burnin=1000)
+model = ERGMModel(ERGMFormula(terms), net)
+sim_nets = sample_networks(model, coef(result);
+                           n_sim=100, burnin=1000)
 ```
 
 ## Goodness-of-Fit
 
 ```julia
 # GOF diagnostics
-gof_result = gof(result; statistics=[:degree, :esp, :distance])
+gof_result = gof(result; stats=[:degree, :esp, :distance])
 
 # MCMC diagnostics
 mcmc_diagnostics(result)
@@ -123,10 +129,13 @@ mcmc_diagnostics(result)
 
 ## Change Statistics
 
-For efficient MCMC, each term implements `change_stat()`:
+For efficient MCMC, each term implements `change_stat()`, the add-direction
+change statistic `g(y⁺ᵢⱼ) − g(y⁻ᵢⱼ)` — the statistic with edge (i,j) present
+minus the statistic with it absent. Its value does not depend on whether the
+edge currently exists:
 
 ```julia
-# Change in statistic when toggling edge (i,j)
+# Change in statistic from adding edge (i,j), given the rest of the network
 delta = change_stat(term, net, i, j)
 ```
 

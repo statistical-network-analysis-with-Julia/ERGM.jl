@@ -4,7 +4,13 @@ ERGM diagnostics.
 Provides functions for assessing ERGM fit and MCMC convergence.
 """
 
-using Statistics
+# Two-sided Monte Carlo p-value: how extreme is the observed count relative
+# to the simulated distribution (statnet-style GOF p-value)
+function _mc_pvalue(sim::AbstractVector{<:Real}, obs::Real)
+    p_ge = mean(sim .>= obs)
+    p_le = mean(sim .<= obs)
+    return min(1.0, 2.0 * min(p_ge, p_le))
+end
 
 """
     gof(result::ERGMResult; n_sim::Int=100, stats::Vector{Symbol}=[:degree, :esp, :distance]) -> NamedTuple
@@ -68,10 +74,10 @@ function _gof_degree(obs_net, sim_nets)
         end
     end
 
-    # Compute p-values (proportion of simulations with stat >= observed)
+    # Two-sided Monte Carlo p-values per degree bin
     p_values = zeros(max_degree + 1)
     for d in 0:max_degree
-        p_values[d+1] = mean(sim_dists[:, d+1] .>= obs_dist[d+1])
+        p_values[d+1] = _mc_pvalue(sim_dists[:, d+1], obs_dist[d+1])
     end
 
     return (
@@ -132,7 +138,7 @@ function _gof_esp(obs_net, sim_nets)
         end
     end
 
-    p_values = [mean(sim_dists[:, e+1] .>= obs_dist[e+1]) for e in 0:max_esp]
+    p_values = [_mc_pvalue(sim_dists[:, e+1], obs_dist[e+1]) for e in 0:max_esp]
 
     return (
         observed = obs_dist,
@@ -146,6 +152,9 @@ end
     _gof_distance(obs_net, sim_nets) -> NamedTuple
 
 GOF for geodesic distance distribution.
+
+For directed networks, distances are out-distances (following edge
+direction), matching a breadth-first search from each source vertex.
 """
 function _gof_distance(obs_net, sim_nets)
     n = nv(obs_net)
@@ -153,7 +162,7 @@ function _gof_distance(obs_net, sim_nets)
     function compute_dist_dist(net)
         dist_counts = Dict{Int, Int}()
         for i in 1:n
-            distances = Graphs.gdistances(net.graph, i)
+            distances = Graphs.gdistances(net, i)
             for j in 1:n
                 j == i && continue
                 d = distances[j]
@@ -187,7 +196,7 @@ function _gof_distance(obs_net, sim_nets)
         end
     end
 
-    p_values = [mean(sim_dists[:, d] .>= obs_vec[d]) for d in 1:max_dist]
+    p_values = [_mc_pvalue(sim_dists[:, d], obs_vec[d]) for d in 1:max_dist]
 
     return (
         observed = obs_vec,

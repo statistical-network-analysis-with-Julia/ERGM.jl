@@ -2,17 +2,21 @@
 Nodal attribute ERGM terms.
 
 Terms based on vertex-level attributes: nodefactor, nodecov, etc.
+
+All `change_stat` methods return the state-independent add-direction change
+statistic `g(y⁺ᵢⱼ) − g(y⁻ᵢⱼ)` (see `src/terms/structural.jl`).
 """
 
 """
     NodeFactor <: NodalTerm
 
-Main effect of a categorical vertex attribute.
-Creates separate terms for each level (except reference).
+Main effect of a categorical vertex attribute: the number of times a vertex
+with the given attribute level appears as an endpoint of an edge. As in
+statnet, an edge within the level counts twice.
 
 # Fields
 - `attr::Symbol`: Vertex attribute name
-- `level::Any`: Specific level (if nothing, creates terms for all levels)
+- `level::Any`: Specific level (if nothing, counts all vertices with the attribute)
 """
 struct NodeFactor <: NodalTerm
     attr::Symbol
@@ -30,37 +34,29 @@ function compute(term::NodeFactor, net)
     for v in vertices(net)
         val = get(attr_vals, v, nothing)
         if !isnothing(val) && (isnothing(term.level) || val == term.level)
-            # Count edges incident to this vertex
-            count += length(neighbors(net, v))
+            # Endpoint appearances of v: total degree (in + out for directed)
+            if is_directed(net)
+                count += length(inneighbors(net, v)) + length(outneighbors(net, v))
+            else
+                count += length(neighbors(net, v))
+            end
         end
     end
 
-    return count / (is_directed(net) ? 1 : 2)  # Avoid double counting for undirected
+    return count
 end
 
 function change_stat(term::NodeFactor, net, i::Int, j::Int)
     attr_vals = get_vertex_attribute(net, term.attr)
-    has_ij = has_edge(net, i, j)
 
-    # Check if i or j has the specified attribute value
+    # Adding edge (i,j) adds one endpoint appearance for each of i and j
     val_i = get(attr_vals, i, nothing)
     val_j = get(attr_vals, j, nothing)
 
     matches_i = !isnothing(val_i) && (isnothing(term.level) || val_i == term.level)
     matches_j = !isnothing(val_j) && (isnothing(term.level) || val_j == term.level)
 
-    delta = 0.0
-    if matches_i
-        delta += 1.0
-    end
-    if matches_j && !is_directed(net)
-        delta += 1.0
-    elseif matches_j && is_directed(net)
-        # For directed, sender and receiver are different
-        delta += 1.0
-    end
-
-    return has_ij ? -delta : delta
+    return Float64(matches_i + matches_j)
 end
 
 """
@@ -96,6 +92,8 @@ function compute(term::NodeCov, net)
     attr_vals = get_vertex_attribute(net, term.attr)
     total = 0.0
 
+    # edges(net) yields each edge exactly once for both directed and
+    # undirected networks, so each edge contributes x_i + x_j once
     for e in edges(net)
         i, j = src(e), dst(e)
         val_i = get(attr_vals, i, 0.0)
@@ -105,19 +103,16 @@ function compute(term::NodeCov, net)
         total += _transform_value(val_j, term.transform)
     end
 
-    return is_directed(net) ? total : total / 2
+    return total
 end
 
 function change_stat(term::NodeCov, net, i::Int, j::Int)
     attr_vals = get_vertex_attribute(net, term.attr)
-    has_ij = has_edge(net, i, j)
 
     val_i = _transform_value(get(attr_vals, i, 0.0), term.transform)
     val_j = _transform_value(get(attr_vals, j, 0.0), term.transform)
 
-    delta = val_i + val_j
-
-    return has_ij ? -delta : delta
+    return val_i + val_j
 end
 
 """
@@ -136,7 +131,7 @@ struct NodeMatch <: NodalTerm
     NodeMatch(attr::Symbol; diff::Bool=false) = new(attr, diff)
 end
 
-name(term::NodeMatch) = term.diff ? "nodemix.$(term.attr)" : "nodematch.$(term.attr)"
+name(term::NodeMatch) = term.diff ? "nodemismatch.$(term.attr)" : "nodematch.$(term.attr)"
 
 function compute(term::NodeMatch, net)
     attr_vals = get_vertex_attribute(net, term.attr)
@@ -162,7 +157,6 @@ end
 
 function change_stat(term::NodeMatch, net, i::Int, j::Int)
     attr_vals = get_vertex_attribute(net, term.attr)
-    has_ij = has_edge(net, i, j)
 
     val_i = get(attr_vals, i, nothing)
     val_j = get(attr_vals, j, nothing)
@@ -172,9 +166,7 @@ function change_stat(term::NodeMatch, net, i::Int, j::Int)
     end
 
     matches = (val_i == val_j)
-    delta = term.diff ? (matches ? 0.0 : 1.0) : (matches ? 1.0 : 0.0)
-
-    return has_ij ? -delta : delta
+    return term.diff ? (matches ? 0.0 : 1.0) : (matches ? 1.0 : 0.0)
 end
 
 """
@@ -212,12 +204,9 @@ end
 
 function change_stat(term::AbsDiff, net, i::Int, j::Int)
     attr_vals = get_vertex_attribute(net, term.attr)
-    has_ij = has_edge(net, i, j)
 
     val_i = Float64(get(attr_vals, i, 0.0))
     val_j = Float64(get(attr_vals, j, 0.0))
 
-    delta = abs(val_i - val_j)^term.pow
-
-    return has_ij ? -delta : delta
+    return abs(val_i - val_j)^term.pow
 end

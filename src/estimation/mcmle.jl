@@ -5,9 +5,6 @@ MCMLE uses MCMC sampling to approximate the likelihood function,
 providing more accurate estimates than MPLE for models with strong dependencies.
 """
 
-using Random
-using Statistics
-
 """
     mcmle(model::ERGMModel; n_samples::Int=1000, burnin::Int=1000,
           interval::Int=100, max_iter::Int=20, tol::Float64=1e-4,
@@ -25,7 +22,10 @@ Fit an ERGM using Monte Carlo Maximum Likelihood Estimation.
 - `verbose::Bool=false`: Print progress
 
 # Returns
-- `ERGMResult`: Fitted model results
+- `ERGMResult`: Fitted model results. `mcmc_samples` holds the statistics
+  sampled at the final coefficients (suitable for `mcmc_diagnostics`);
+  samples from earlier iterations are discarded since they target different
+  coefficient values.
 """
 function mcmle(model::ERGMModel{T};
                n_samples::Int=1000,
@@ -50,7 +50,6 @@ function mcmle(model::ERGMModel{T};
     obs_stats = compute_all(terms, net)
 
     converged = false
-    all_samples = Matrix{Float64}(undef, 0, p)
 
     for iter in 1:max_iter
         if verbose
@@ -59,7 +58,6 @@ function mcmle(model::ERGMModel{T};
 
         # Sample networks from current model
         samples = _mcmc_sample(model, θ, n_samples, burnin, interval)
-        all_samples = vcat(all_samples, samples)
 
         # Compute mean and covariance of sampled statistics
         mean_stats = vec(mean(samples, dims=1))
@@ -90,21 +88,23 @@ function mcmle(model::ERGMModel{T};
     final_samples = _mcmc_sample(model, θ, n_samples, burnin, interval)
     cov_stats = cov(final_samples)
 
-    # Standard errors from inverse Fisher information
-    std_errors = try
-        sqrt.(diag(inv(cov_stats)))
+    # Covariance of θ̂ from the inverse Fisher information
+    var_cov, std_errors = try
+        V = Matrix(inv(Symmetric(cov_stats)))
+        V, sqrt.(diag(V))
     catch
-        fill(NaN, p)
+        fill(NaN, p, p), fill(NaN, p)
     end
 
     z_values = θ ./ std_errors
     p_values = 2 .* (1 .- cdf.(Normal(), abs.(z_values)))
 
-    # Approximate log-likelihood (using importance sampling)
-    loglik = _approximate_loglik(model, θ, obs_stats, final_samples)
-
     n = nv(net)
     n_dyads = model.directed ? n * (n - 1) : n * (n - 1) ÷ 2
+
+    # Approximate log-likelihood, normalized against the null (θ = 0) model
+    loglik = _approximate_loglik(θ, obs_stats, final_samples, n_dyads)
+
     aic = -2 * loglik + 2 * p
     bic = -2 * loglik + p * log(n_dyads)
 
@@ -114,52 +114,60 @@ function mcmle(model::ERGMModel{T};
         std_errors,
         z_values,
         p_values,
+        var_cov,
         loglik,
         aic,
         bic,
         :mcmle,
         converged,
-        all_samples
+        final_samples
     )
 end
 
 """
     _mcmc_sample(model, θ, n_samples, burnin, interval) -> Matrix{Float64}
 
-Generate MCMC samples of network statistics.
+Generate MCMC samples of network statistics, starting from the observed
+network.
 """
 function _mcmc_sample(model::ERGMModel{T}, θ::Vector{Float64},
                       n_samples::Int, burnin::Int, interval::Int) where T
-    net = model.network
-    terms = model.formula.terms
-    p = length(terms)
-    n = nv(net)
+    sample_net = _copy_network(model.network)
+    # Function barrier: model.formula.terms is not concretely inferable from
+    # the model, so dispatch once here and run the loop fully typed.
+    return _mcmc_run!(sample_net, model.formula.terms, θ, model.directed,
+                      n_samples, burnin, interval)
+end
 
-    # Create a copy of the network for sampling
-    sample_net = _copy_network(net)
+function _mcmc_run!(sample_net, terms::TermSet, θ::Vector{Float64},
+                    directed::Bool, n_samples::Int, burnin::Int, interval::Int)
+    p = length(terms)
+    n = nv(sample_net)
 
     samples = Matrix{Float64}(undef, n_samples, p)
     total_steps = burnin + n_samples * interval
 
     current_stats = compute_all(terms, sample_net)
+    delta = Vector{Float64}(undef, p)
     sample_idx = 0
 
     for step in 1:total_steps
-        # Propose a random edge toggle
+        # Propose a random dyad toggle
         i = rand(1:n)
         j = rand(1:n)
-        while i == j || (!model.directed && j < i)
+        while i == j || (!directed && j < i)
             i = rand(1:n)
             j = rand(1:n)
         end
 
-        # Compute change statistics
-        delta = change_stat_all(terms, sample_net, i, j)
+        # Add-direction change statistics for the dyad
+        change_stat_all!(delta, terms, sample_net, i, j)
 
-        # Metropolis-Hastings acceptance probability
+        # Metropolis–Hastings log acceptance ratio: θ'Δ for an addition,
+        # −θ'Δ for a removal
         log_accept = dot(θ, delta)
         if has_edge(sample_net, i, j)
-            log_accept = -log_accept  # Removing edge
+            log_accept = -log_accept
         end
 
         if log(rand()) < log_accept
@@ -189,7 +197,7 @@ end
 Create a copy of a network.
 """
 function _copy_network(net::Network{T}) where T
-    new_net = Network{T}(; n=nv(net), directed=is_directed(net))
+    new_net = Network{T}(; n=Int(nv(net)), directed=is_directed(net))
 
     for e in edges(net)
         add_edge!(new_net, src(e), dst(e))
@@ -199,24 +207,29 @@ function _copy_network(net::Network{T}) where T
 end
 
 """
-    _approximate_loglik(model, θ, obs_stats, samples) -> Float64
+    _approximate_loglik(θ, obs_stats, samples, n_dyads) -> Float64
 
-Approximate log-likelihood using importance sampling.
+Approximate the log-likelihood `θ'g(y_obs) − log Z(θ)` via importance
+sampling against the null model θ = 0 (whose normalizer is `2^n_dyads`
+under the Bernoulli reference):
+
+    log Z(θ) = n_dyads·log 2 − log E_θ[exp(−θ'g(Y))]
+
+The expectation is estimated from statistics sampled at θ. This estimate is
+comparable across models but can have high Monte Carlo variance when θ is
+far from 0.
 """
-function _approximate_loglik(model::ERGMModel, θ::Vector{Float64},
+function _approximate_loglik(θ::Vector{Float64},
                              obs_stats::Vector{Float64},
-                             samples::Matrix{Float64})
-    # Log-likelihood ≈ θ'g(y_obs) - log(mean(exp(θ'(g(y_obs) - g(y_i)))))
-    # where y_i are samples
+                             samples::Matrix{Float64},
+                             n_dyads::Int)
+    log_weights = -(samples * θ)  # n_samples × 1
 
-    n_samples = size(samples, 1)
-    diff = obs_stats' .- samples  # n_samples × p
-
-    log_weights = diff * θ  # n_samples × 1
-
-    # Log-sum-exp for numerical stability
+    # Log-mean-exp for numerical stability
     max_lw = maximum(log_weights)
-    log_normalizer = max_lw + log(mean(exp.(log_weights .- max_lw)))
+    log_mean = max_lw + log(mean(exp.(log_weights .- max_lw)))
+
+    log_normalizer = n_dyads * log(2.0) - log_mean
 
     return dot(θ, obs_stats) - log_normalizer
 end

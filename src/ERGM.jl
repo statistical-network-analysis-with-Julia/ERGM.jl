@@ -21,7 +21,7 @@ using StatsBase
 # Core types
 export AbstractERGMTerm, ERGMFormula, ERGMModel, ERGMResult
 export TermSet
-export compute, compute_all
+export compute, compute_all, name
 
 # Built-in terms
 export Edges, Mutual, Triangle, Kstar, TwoPath
@@ -39,7 +39,7 @@ export simulate_ergm, sample_networks
 export gof, mcmc_diagnostics
 
 # Utilities
-export change_stat, summary_stats
+export change_stat, change_stat_all, summary_stats
 export coef, stderror, vcov
 
 # Include source files

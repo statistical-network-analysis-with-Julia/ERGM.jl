@@ -12,7 +12,7 @@ change_stat(term, net, i, j) -> Float64
 name(term) -> String
 ```
 
-The `compute` function calculates the full statistic value for the network. The `change_stat` function computes how the statistic changes when edge `(i, j)` is toggled — this is the key quantity used in both estimation and MCMC simulation.
+The `compute` function calculates the full statistic value for the network. The `change_stat` function computes the *add-direction* change statistic $g(y^+_{ij}) - g(y^-_{ij})$: the statistic with edge $(i, j)$ present minus the statistic with it absent, holding the rest of the network fixed. Its value does not depend on whether the edge currently exists — this state-independent quantity is what the MPLE design matrix and the Metropolis–Hastings sampler both require (the sampler negates it for removal proposals).
 
 ## Term Categories
 
@@ -85,7 +85,7 @@ Kstar(3)   # Three-stars
 
 ### TwoPath
 
-The number of directed two-paths ($i \to j \to k$):
+The number of two-paths. For directed networks this counts pairs of edges $h \to v$, $v \to k$ with $h \neq k$ (statnet's `twopath`); for undirected networks it counts 2-stars, $\sum_v \binom{d_v}{2}$:
 
 ```julia
 TwoPath()
@@ -255,7 +255,7 @@ edges_term = Edges()
 println("Edge count: ", compute(edges_term, net))
 
 # Compute change statistic
-println("Change from toggling (1,2): ", change_stat(edges_term, net, 1, 2))
+println("Change from adding (1,2): ", change_stat(edges_term, net, 1, 2))
 
 # Compute all terms at once via TermSet
 ts = TermSet(terms)
@@ -275,7 +275,7 @@ println(stats)
 ### Change Statistics for All Terms
 
 ```julia
-# How all statistics change when toggling edge (1, 2)
+# How all statistics change when adding edge (1, 2)
 ts = TermSet(terms)
 deltas = change_stat_all(ts, net, 1, 2)
 println("Change statistics: ", deltas)

@@ -49,31 +49,41 @@ function sample_networks(model::ERGMModel{T}, θ::Vector{Float64};
                          burnin::Int=10000,
                          interval::Int=1000,
                          start_net::Union{Nothing,Network}=nothing) where T
-    terms = model.formula.terms
-    n = nv(model.network)
+    n = Int(nv(model.network))
 
     # Initialize network
     if isnothing(start_net)
-        current_net = _random_network(n; directed=model.directed,
-                                       density=network_density(model.network))
+        current_net = _random_network(T, n; directed=model.directed,
+                                      density=network_density(model.network))
     else
         current_net = _copy_network(start_net)
     end
 
+    # Function barrier (see _mcmc_sample)
+    return _simulate_run!(current_net, model.formula.terms, θ, model.directed,
+                          n_sim, burnin, interval)
+end
+
+function _simulate_run!(current_net::Network{T}, terms::TermSet,
+                        θ::Vector{Float64}, directed::Bool,
+                        n_sim::Int, burnin::Int, interval::Int) where T
+    n = nv(current_net)
     networks = Network{T}[]
+    delta = Vector{Float64}(undef, length(terms))
     total_steps = burnin + n_sim * interval
 
     for step in 1:total_steps
-        # Propose random edge toggle
+        # Propose random dyad toggle
         i = rand(1:n)
         j = rand(1:n)
-        while i == j || (!model.directed && j < i)
+        while i == j || (!directed && j < i)
             i = rand(1:n)
             j = rand(1:n)
         end
 
-        # Compute change statistics and acceptance probability
-        delta = change_stat_all(terms, current_net, i, j)
+        # Add-direction change statistics; MH ratio is θ'Δ for an addition
+        # and −θ'Δ for a removal
+        change_stat_all!(delta, terms, current_net, i, j)
         log_accept = dot(θ, delta)
 
         if has_edge(current_net, i, j)
@@ -98,12 +108,13 @@ function sample_networks(model::ERGMModel{T}, θ::Vector{Float64};
 end
 
 """
-    _random_network(n; directed=true, density=0.1) -> Network
+    _random_network(T, n; directed=true, density=0.1) -> Network{T}
 
 Create a random network with approximately the specified density.
 """
-function _random_network(n::Int; directed::Bool=true, density::Float64=0.1)
-    net = Network(n; directed=directed)
+function _random_network(::Type{T}, n::Int;
+                         directed::Bool=true, density::Float64=0.1) where T<:Integer
+    net = Network{T}(; n=n, directed=directed)
 
     for i in 1:n
         j_range = directed ? (1:n) : ((i+1):n)

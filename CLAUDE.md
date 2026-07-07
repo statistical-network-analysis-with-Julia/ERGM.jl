@@ -22,7 +22,7 @@ using Pkg; Pkg.test()          # run tests
 using ERGM                      # load package
 ```
 
-No docs build system is set up yet.
+Docs build with Documenter via `docs/make.jl`. Julia 1.12+ is required (Network.jl cannot load on earlier versions).
 
 ## Architecture
 
@@ -50,8 +50,8 @@ No docs build system is set up yet.
 ## Conventions
 
 - All term statistics return `Float64`.
-- `change_stat` returns positive values when adding an edge increases the statistic, negative when removing.
+- `change_stat` returns the state-independent add-direction change statistic `g(y⁺ij) − g(y⁻ij)` (statistic with edge (i,j) present minus absent, rest of the network fixed). It must NOT depend on whether the edge currently exists; the MH sampler negates it for removal proposals.
 - Term `name()` functions use R ergm-style lowercase names (e.g., `"edges"`, `"nodematch.gender"`, `"gwesp.fixed.0.5"`).
 - Internal/private functions are prefixed with underscore (e.g., `_mcmc_sample`, `_copy_network`).
 - Tests use `@testset` blocks grouped by feature in a single `test/runtests.jl` file.
-- The package depends on a local/unregistered `Network` and `SNA` package (not in General registry).
+- The package depends on the local/unregistered `Network` package (not in General registry), resolved via `[sources]` from `../Network.jl`.

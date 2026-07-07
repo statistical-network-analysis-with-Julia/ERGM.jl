@@ -2,13 +2,50 @@
 Maximum Pseudo-Likelihood Estimation (MPLE) for ERGMs.
 
 MPLE treats each potential edge as an independent observation and fits
-a logistic regression model. This is fast but may be biased for models
-with strong dependencies.
+a logistic regression of the dyad indicators on the add-direction change
+statistics, each computed conditional on the rest of the observed network.
+This is fast but may be biased for models with strong dependencies.
 """
 
-using Distributions
-using Optim
-using LinearAlgebra
+# Numerically stable log(1 + exp(x))
+_log1pexp(x::Float64) = x > 35 ? x : (x < -35 ? exp(x) : log1p(exp(x)))
+
+"""
+    _mple_data(net, terms::TermSet, directed::Bool)
+
+Build compressed MPLE data: unique change-statistic rows with the number of
+dyads (`n_tot`) and the number of observed edges (`n_one`) sharing each row.
+Compressing identical rows keeps memory O(unique rows) instead of O(n²).
+"""
+function _mple_data(net, terms::TermSet, directed::Bool)
+    p = length(terms)
+    rows = Dict{Vector{Float64}, Tuple{Float64, Float64}}()
+
+    n = nv(net)
+    for i in 1:n
+        j_range = directed ? (1:n) : ((i+1):n)
+        for j in j_range
+            i == j && continue
+
+            x = change_stat_all(terms, net, i, j)
+            n_tot, n_one = get(rows, x, (0.0, 0.0))
+            rows[x] = (n_tot + 1.0, n_one + (has_edge(net, i, j) ? 1.0 : 0.0))
+        end
+    end
+
+    n_rows = length(rows)
+    X = Matrix{Float64}(undef, n_rows, p)
+    n_tot = Vector{Float64}(undef, n_rows)
+    n_one = Vector{Float64}(undef, n_rows)
+
+    for (r, (x, (tot, one))) in enumerate(rows)
+        X[r, :] = x
+        n_tot[r] = tot
+        n_one[r] = one
+    end
+
+    return X, n_tot, n_one
+end
 
 """
     mple(model::ERGMModel; verbose::Bool=false) -> ERGMResult
@@ -21,101 +58,75 @@ Fit an ERGM using Maximum Pseudo-Likelihood Estimation.
 
 # Returns
 - `ERGMResult`: Fitted model results
+
+Note: the reported log-likelihood is the maximized *pseudo*-log-likelihood;
+AIC/BIC derived from it are only heuristics for dependence models.
 """
 function mple(model::ERGMModel{T}; verbose::Bool=false) where T
     net = model.network
     terms = model.formula.terms
-    n = nv(net)
     p = length(terms)
 
-    # Build design matrix and response
     if verbose
         println("Building design matrix...")
     end
 
-    # For directed networks: n*(n-1) potential edges
-    # For undirected: n*(n-1)/2 potential edges
-    if model.directed
-        n_dyads = n * (n - 1)
-    else
-        n_dyads = n * (n - 1) ÷ 2
+    X, n_tot, n_one = _mple_data(net, terms, model.directed)
+    n_dyads = sum(n_tot)
+
+    if verbose
+        println("Fitting logistic regression ($(size(X, 1)) unique rows, $(Int(n_dyads)) dyads)...")
     end
 
-    X = zeros(n_dyads, p)
-    y = zeros(n_dyads)
+    # Weighted logistic regression: each unique row r covers n_tot[r] dyads,
+    # n_one[r] of which are edges.
+    η = Vector{Float64}(undef, size(X, 1))
 
-    idx = 0
-    for i in 1:n
-        j_range = model.directed ? (1:n) : ((i+1):n)
-        for j in j_range
-            i == j && continue
+    function neg_loglik(β)
+        mul!(η, X, β)
+        ll = 0.0
+        @inbounds for r in eachindex(η)
+            ll += n_one[r] * η[r] - n_tot[r] * _log1pexp(η[r])
+        end
+        return -ll
+    end
 
-            idx += 1
-            y[idx] = has_edge(net, i, j) ? 1.0 : 0.0
-
-            # Compute change statistics
-            # Note: we compute change stats as if adding edge to empty network
-            # This is an approximation - proper MPLE uses conditional stats
-            for (t_idx, term) in enumerate(terms)
-                X[idx, t_idx] = change_stat(term, net, i, j)
+    function grad!(g, β)
+        mul!(η, X, β)
+        fill!(g, 0.0)
+        @inbounds for r in eachindex(η)
+            resid = n_one[r] - n_tot[r] / (1 + exp(-η[r]))
+            for c in 1:length(g)
+                g[c] -= X[r, c] * resid
             end
         end
     end
 
-    if verbose
-        println("Fitting logistic regression...")
-    end
-
-    # Fit logistic regression via maximum likelihood
-    # Negative log-likelihood
-    function neg_loglik(β)
-        η = X * β
-        # Numerical stability
-        η = clamp.(η, -500, 500)
-        ll = sum(y .* η .- log1p.(exp.(η)))
-        return -ll
-    end
-
-    # Gradient
-    function grad!(g, β)
-        η = X * β
-        η = clamp.(η, -500, 500)
-        p_pred = 1 ./ (1 .+ exp.(-η))
-        residuals = y .- p_pred
-        g .= -X' * residuals
-    end
-
-    # Optimize
     result = optimize(neg_loglik, grad!, zeros(p), LBFGS())
 
     coefficients = Optim.minimizer(result)
 
-    # Compute standard errors from Hessian
-    # H = X' * diag(p*(1-p)) * X
-    η = X * coefficients
-    η = clamp.(η, -500, 500)
+    # Covariance from the observed information: H = X' diag(n_tot p(1-p)) X
+    mul!(η, X, coefficients)
     p_pred = 1 ./ (1 .+ exp.(-η))
-    W = p_pred .* (1 .- p_pred)
-
-    # Hessian approximation
+    W = n_tot .* p_pred .* (1 .- p_pred)
     H = X' * (W .* X)
 
-    # Standard errors
-    std_errors = try
-        var_cov = inv(H)
-        sqrt.(diag(var_cov))
+    var_cov, std_errors = try
+        V = Matrix(inv(Symmetric(H)))
+        V, sqrt.(diag(V))
     catch
-        fill(NaN, p)
+        fill(NaN, p, p), fill(NaN, p)
     end
 
     # Z-values and p-values
     z_values = coefficients ./ std_errors
     p_values = 2 .* (1 .- cdf.(Normal(), abs.(z_values)))
 
-    # Log-likelihood at estimates
+    # Pseudo-log-likelihood at the estimates
     loglik = -neg_loglik(coefficients)
 
-    # AIC and BIC
+    # AIC and BIC (based on the pseudo-likelihood)
     aic = -2 * loglik + 2 * p
     bic = -2 * loglik + p * log(n_dyads)
 
@@ -125,6 +136,7 @@ function mple(model::ERGMModel{T}; verbose::Bool=false) where T
         std_errors,
         z_values,
         p_values,
+        var_cov,
         loglik,
         aic,
         bic,

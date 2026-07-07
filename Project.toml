@@ -1,5 +1,5 @@
 name = "ERGM"
-uuid = "c3d4e5f6-a7b8-9012-cdef-345678901234"
+uuid = "d623cd87-b018-4e2a-bf53-b77ebcdc9da2"
 authors = ["Statistical Network Analysis with Julia"]
 version = "0.1.0"
 
@@ -7,27 +7,28 @@ version = "0.1.0"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-Network = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+Network = "027a387e-e55f-4537-a155-5037e5a23bdb"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-SNA = "b2c3d4e5-f6a7-8901-bcde-f23456789012"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [sources]
 Network = {path = "../Network.jl"}
-SNA = {path = "../SNA.jl"}
 
 [compat]
-julia = "1.9"
+julia = "1.12"
 Distributions = "0.25"
 Graphs = "1.9"
+Network = "0.1"
 Optim = "1.7"
 StatsBase = "0.34"
 
 [extras]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Random", "Statistics", "Test"]

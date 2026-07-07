@@ -12,7 +12,8 @@ Abstract base type for all ERGM terms.
 
 All terms must implement:
 - `compute(term, net) -> Float64`: Compute the term statistic for the network
-- `change_stat(term, net, i, j) -> Float64`: Compute change in statistic when toggling edge (i,j)
+- `change_stat(term, net, i, j) -> Float64`: The add-direction change statistic
+  `g(y⁺ᵢⱼ) − g(y⁻ᵢⱼ)`, independent of the dyad's current state
 - `name(term) -> String`: Return the term name
 """
 abstract type AbstractERGMTerm end
@@ -59,8 +60,13 @@ end
 """
     change_stat(term::AbstractERGMTerm, net, i::Int, j::Int) -> Float64
 
-Compute the change in the term statistic when edge (i,j) is toggled.
-Positive if adding the edge increases the statistic.
+Compute the add-direction change statistic for dyad (i,j):
+`g(y⁺ᵢⱼ) − g(y⁻ᵢⱼ)`, i.e. the statistic with edge (i,j) present minus the
+statistic with it absent, holding all other dyads at their current values.
+
+The result must not depend on whether edge (i,j) currently exists — this is
+the convention required by both the MPLE design matrix and the
+Metropolis–Hastings sampler (which negates it for removal proposals).
 """
 function change_stat(term::AbstractERGMTerm, net, i::Int, j::Int)
     error("change_stat() not implemented for $(typeof(term))")
@@ -79,16 +85,24 @@ end
     TermSet
 
 A collection of ERGM terms.
+
+Terms are stored as a tuple so that `compute_all`/`change_stat_all` compile
+to statically dispatched calls per term instead of dynamic dispatch through
+an abstractly-typed vector (which would dominate the MCMC inner loop).
 """
-struct TermSet
-    terms::Vector{AbstractERGMTerm}
+struct TermSet{T<:Tuple}
+    terms::T
     names::Vector{String}
 
-    function TermSet(terms::Vector{<:AbstractERGMTerm})
+    function TermSet(terms::T) where {T<:Tuple}
+        all(t -> t isa AbstractERGMTerm, terms) ||
+            throw(ArgumentError("all elements must be AbstractERGMTerms"))
         names = [name(t) for t in terms]
-        new(terms, names)
+        new{T}(terms, names)
     end
 end
+
+TermSet(terms::Vector{<:AbstractERGMTerm}) = TermSet(Tuple(terms))
 
 Base.length(ts::TermSet) = length(ts.terms)
 Base.iterate(ts::TermSet, state=1) = state > length(ts) ? nothing : (ts.terms[state], state + 1)
@@ -100,16 +114,29 @@ Base.getindex(ts::TermSet, i) = ts.terms[i]
 Compute all term statistics for the network.
 """
 function compute_all(ts::TermSet, net)
-    return [compute(t, net) for t in ts.terms]
+    return collect(map(t -> compute(t, net), ts.terms))
 end
 
 """
     change_stat_all(ts::TermSet, net, i::Int, j::Int) -> Vector{Float64}
 
-Compute change statistics for all terms when toggling edge (i,j).
+Compute add-direction change statistics for all terms for dyad (i,j).
 """
 function change_stat_all(ts::TermSet, net, i::Int, j::Int)
-    return [change_stat(t, net, i, j) for t in ts.terms]
+    return collect(map(t -> change_stat(t, net, i, j), ts.terms))
+end
+
+"""
+    change_stat_all!(dest, ts::TermSet, net, i::Int, j::Int) -> dest
+
+In-place version of [`change_stat_all`](@ref) for use in sampling loops.
+"""
+function change_stat_all!(dest::AbstractVector{Float64}, ts::TermSet, net, i::Int, j::Int)
+    vals = map(t -> change_stat(t, net, i, j), ts.terms)
+    for k in eachindex(vals)
+        dest[k] = vals[k]
+    end
+    return dest
 end
 
 """
@@ -180,12 +207,14 @@ Results from fitting an ERGM.
 - `std_errors::Vector{Float64}`: Standard errors
 - `z_values::Vector{Float64}`: Z-statistics
 - `p_values::Vector{Float64}`: Two-sided p-values
+- `vcov::Matrix{Float64}`: Estimated covariance matrix of the coefficients
 - `loglik::Float64`: Log-likelihood (or pseudo-log-likelihood)
 - `aic::Float64`: AIC
 - `bic::Float64`: BIC
 - `method::Symbol`: Estimation method (:mple or :mcmle)
 - `converged::Bool`: Convergence status
-- `mcmc_samples::Union{Nothing, Matrix{Float64}}`: MCMC samples (for MCMLE)
+- `mcmc_samples::Union{Nothing, Matrix{Float64}}`: Statistics sampled at the
+  final coefficient values (for MCMLE)
 """
 struct ERGMResult{T}
     model::ERGMModel{T}
@@ -193,6 +222,7 @@ struct ERGMResult{T}
     std_errors::Vector{Float64}
     z_values::Vector{Float64}
     p_values::Vector{Float64}
+    vcov::Matrix{Float64}
     loglik::Float64
     aic::Float64
     bic::Float64
@@ -229,4 +259,4 @@ end
 # Accessor functions
 coef(result::ERGMResult) = result.coefficients
 stderror(result::ERGMResult) = result.std_errors
-vcov(result::ERGMResult) = diagm(result.std_errors.^2)  # Simplified
+vcov(result::ERGMResult) = result.vcov

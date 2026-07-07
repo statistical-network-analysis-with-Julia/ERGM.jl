@@ -22,8 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.9'
-          - '1.10'
+          # Network.jl requires Julia >= 1.12 (struct sharing its module name)
+          - '1.12'
           - '1'
           - 'nightly'
         os:
@@ -53,7 +53,6 @@ jobs:
             using Pkg
             Pkg.develop([
               PackageSpec(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl.git"),
-              PackageSpec(url="https://github.com/statistical-network-analysis-with-Julia/SNA.jl.git"),
             ])'
 
       - uses: julia-actions/julia-buildpkg@v1
