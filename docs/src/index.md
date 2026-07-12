@@ -45,7 +45,7 @@ ERGMs are widely used in:
 
 ## Features
 
-- **Rich term library**: Structural terms (edges, triangles, k-stars, GWESP with statnet's directed OTP/ITP/OSP/ISP shared-partner types, GWDegree), nodal attribute terms (nodefactor, nodecov, nodematch with per-level differential homophily, nodemismatch, absdiff), and dyadic terms (edgecov)
+- **Rich term library**: Structural terms (edges, triangles, k-stars, GWESP and GWDSP with statnet's directed OTP/ITP/OSP/ISP shared-partner types, GWDegree/GWIDegree/GWODegree, degree/idegree/odegree count terms), nodal attribute terms (nodefactor and nodemix with statnet's per-level expansion, nodecov, nodematch with per-level differential homophily, nodemismatch, absdiff), and dyadic terms (edgecov)
 - **Two estimation methods**: MPLE for fast approximation and MCMLE for accurate maximum likelihood
 - **Network simulation**: Simulate networks from fitted models via MCMC
 - **Goodness-of-fit diagnostics**: Compare observed vs. simulated degree, ESP, and geodesic distance distributions
@@ -56,7 +56,8 @@ ERGMs are widely used in:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/Statistical-network-analysis-with-Julia/ERGM.jl")
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl")
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl")
 ```
 
 Or for development:
@@ -105,9 +106,12 @@ gof_result = gof(result; stats=[:degree, :esp, :distance])
 | Baseline density | [`Edges`](@ref) |
 | Reciprocity (directed) | [`Mutual`](@ref) |
 | Triadic closure | [`Triangle`](@ref), [`GWESP`](@ref) |
-| Degree distribution | [`Kstar`](@ref), [`GWDegree`](@ref) |
+| Two-path prevalence | [`GWDSP`](@ref) |
+| Degree distribution | [`Kstar`](@ref), [`GWDegree`](@ref), [`GWIDegree`](@ref), [`GWODegree`](@ref) |
+| Specific degree counts (isolates, ...) | [`Degree`](@ref), [`IDegree`](@ref), [`ODegree`](@ref) |
 | Attribute homophily | [`NodeMatch`](@ref), [`AbsDiff`](@ref) |
-| Continuous covariates | [`NodeCov`](@ref), [`NodeFactor`](@ref) |
+| Group mixing structure | [`NodeMix`](@ref) |
+| Attribute main effects | [`NodeCov`](@ref), [`NodeFactor`](@ref) |
 | Dyadic covariates | [`EdgeCov`](@ref) |
 
 ## Documentation

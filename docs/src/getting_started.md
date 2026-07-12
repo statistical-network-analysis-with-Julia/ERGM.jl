@@ -8,7 +8,8 @@ Install ERGM.jl from GitHub:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/Statistical-network-analysis-with-Julia/ERGM.jl")
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl")
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl")
 ```
 
 ## Basic Workflow
@@ -88,8 +89,9 @@ ERGM.jl provides terms organized by type:
 | Category | Terms | Description |
 |----------|-------|-------------|
 | **Structural** | `Edges`, `Mutual`, `Triangle`, `Kstar`, `TwoPath` | Network topology |
-| **Geometrically Weighted** | `GWESP`, `GWDegree` | Downweighted structural terms |
-| **Nodal** | `NodeFactor`, `NodeCov`, `NodeMatch`, `NodeMismatch`, `AbsDiff` | Vertex attribute effects |
+| **Degree counts** | `Degree`, `IDegree`, `ODegree` | Vertices with a given (in-/out-)degree |
+| **Geometrically Weighted** | `GWESP`, `GWDSP`, `GWDegree`, `GWIDegree`, `GWODegree` | Downweighted structural terms |
+| **Nodal** | `NodeFactor`, `NodeCov`, `NodeMatch`, `NodeMismatch`, `NodeMix`, `AbsDiff` | Vertex attribute effects |
 | **Dyadic** | `EdgeCov` | Dyad-level covariate effects |
 
 ### Example: Comprehensive Model
@@ -160,21 +162,25 @@ The result object contains coefficient estimates and test statistics:
 # Print formatted summary table
 println(result)
 
-# Output:
+# Output (the shared ecosystem coefficient table):
 # ERGM Results
 # ============
 # Method: mple
-# Log-likelihood: -45.6789
-# AIC: 97.36, BIC: 103.12
+# Log-likelihood: -10.797
+# AIC: 27.59, BIC: 33.01
 # Converged: true
 #
 # Coefficients:
-# ------------------------------------------------------------
-# edges                  -2.3456     0.4321     0.0000 ***
-# triangle                0.8765     0.3210     0.0063 **
-# nodematch.gender        0.5432     0.2890     0.0601 .
-# ------------------------------------------------------------
+#                   Estimate  Std.Error  z value  Pr(>|z|)
+# edges              -2.4172     0.7513  -3.2172    0.0013 **
+# triangle            3.4269     1.3124   2.6111    0.0090 **
+# nodematch.gender   -2.0193     1.4598  -1.3833    0.1666
+# ---
 # Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+#
+# ... followed by a warning: this model contains dyad-dependent terms
+# (Triangle), so the naive MPLE standard errors are suspect — refit with
+# method=:mcmle or use se=:bootstrap.
 ```
 
 ### Accessing Results Programmatically
@@ -249,7 +255,8 @@ println("Mean edges in simulations: ",
 
 # Goodness of fit
 gof_result = gof(result; n_sim=50, stats=[:degree, :esp])
-println("Degree GOF p-values: ", gof_result.results[:degree].p_values)
+deg = only(s for s in gof_result.statistics if s.name == "degree")
+println("Degree GOF p-values: ", deg.p_values)
 ```
 
 ## Network Simulation
@@ -276,10 +283,10 @@ Compare observed network properties to the distribution of properties across sim
 ```julia
 gof_result = gof(result; n_sim=100, stats=[:degree, :esp, :distance])
 
-# Degree distribution GOF
-deg_gof = gof_result.results[:degree]
+# Degree distribution GOF (one GOFStatistic panel per statistic)
+deg_gof = only(s for s in gof_result.statistics if s.name == "degree")
 println("Observed degree distribution: ", deg_gof.observed)
-println("Simulated mean: ", round.(deg_gof.simulated_mean, digits=1))
+println("Simulated mean: ", round.(vec(mean(deg_gof.simulated; dims=1)), digits=1))
 ```
 
 ## Best Practices

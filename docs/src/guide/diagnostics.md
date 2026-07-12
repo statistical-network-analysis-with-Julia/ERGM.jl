@@ -42,36 +42,51 @@ seeded deterministically from `rng`, so results are thread-count-independent).
 
 ### Available Statistics
 
-The `gof` function compares three types of network statistics:
+The `gof` function compares these network statistics:
 
 | Statistic | Description | What it Captures |
 |-----------|-------------|-----------------|
 | `:degree` | Degree distribution | Overall connectivity patterns |
+| `:idegree` / `:odegree` | In-/out-degree distributions | Direction-specific connectivity (directed networks) |
 | `:esp` | Edgewise shared partner distribution | Local clustering / triadic closure |
 | `:distance` | Geodesic distance distribution | Global network structure / reachability |
 
+For **directed** networks, requesting `:degree` produces separate
+`idegree` and `odegree` panels (as R ergm's GOF does), and the `:esp`
+panel uses the `esp_type` shared-partner definition (default `:OTP`,
+statnet's directed default — same types as `GWESP`).
+
 ### GOF Results
 
-Each statistic returns a `NamedTuple` with:
+`gof` returns a `Network.GOFResult` — the goodness-of-fit container
+shared by every model package in the ecosystem. Its `statistics` field
+holds one `GOFStatistic` per panel:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `observed` | `Vector` | Observed distribution |
-| `simulated_mean` | `Vector{Float64}` | Mean across simulations |
-| `simulated_sd` | `Vector{Float64}` | Standard deviation across simulations |
-| `p_values` | `Vector{Float64}` | P-values per category |
+| `name` | `String` | Panel name (`"degree"`, `"esp"`, ...) |
+| `labels` | `Vector{String}` | Level labels (degree 0, 1, 2, ...) |
+| `observed` | `Vector{Float64}` | Observed distribution |
+| `simulated` | `Matrix{Float64}` | One row per simulated network |
+| `p_values` | `Vector{Float64}` | Two-sided Monte-Carlo p-values per level |
+
+p-values use the shared `(1 + k)/(N + 1)` Monte-Carlo estimator
+(`Network.mc_pvalue`), so they are never exactly zero. `println(gof_result)`
+renders observed value, simulation envelope, and p-value per level.
 
 ### Interpreting GOF Results
 
 ```julia
-# Degree distribution
-deg_gof = gof_result.results[:degree]
+using Statistics
+
+# Degree distribution panel
+deg_gof = only(s for s in gof_result.statistics if s.name == "degree")
 
 println("Degree distribution GOF:")
 for d in 0:min(10, length(deg_gof.observed)-1)
     obs = deg_gof.observed[d+1]
-    sim_mean = round(deg_gof.simulated_mean[d+1], digits=1)
-    sim_sd = round(deg_gof.simulated_sd[d+1], digits=1)
+    sim_mean = round(mean(deg_gof.simulated[:, d+1]), digits=1)
+    sim_sd = round(std(deg_gof.simulated[:, d+1]), digits=1)
     p = round(deg_gof.p_values[d+1], digits=3)
     println("  Degree $d: obs=$obs, sim=$sim_mean ± $sim_sd, p=$p")
 end
@@ -88,12 +103,12 @@ end
 The degree GOF compares the count of nodes with each degree value:
 
 ```julia
-deg_gof = gof_result.results[:degree]
+deg_gof = only(s for s in gof_result.statistics if s.name == "degree")
 
 # Good fit: observed values fall within simulated range
 for d in 0:length(deg_gof.observed)-1
-    within_range = abs(deg_gof.observed[d+1] - deg_gof.simulated_mean[d+1]) <
-                   2 * deg_gof.simulated_sd[d+1]
+    sim_col = deg_gof.simulated[:, d+1]
+    within_range = abs(deg_gof.observed[d+1] - mean(sim_col)) < 2 * std(sim_col)
     status = within_range ? "OK" : "POOR"
     println("Degree $d: $status")
 end
@@ -104,12 +119,12 @@ end
 The ESP GOF compares how many edges have 0, 1, 2, ... shared partners:
 
 ```julia
-esp_gof = gof_result.results[:esp]
+esp_gof = only(s for s in gof_result.statistics if s.name == "esp")
 
 println("ESP distribution GOF:")
 for e in 0:length(esp_gof.observed)-1
     println("  ESP $e: obs=$(esp_gof.observed[e+1]), ",
-            "sim=$(round(esp_gof.simulated_mean[e+1], digits=1))")
+            "sim=$(round(mean(esp_gof.simulated[:, e+1]), digits=1))")
 end
 ```
 
@@ -118,12 +133,12 @@ end
 The distance GOF compares the distribution of shortest path lengths between all reachable pairs:
 
 ```julia
-dist_gof = gof_result.results[:distance]
+dist_gof = only(s for s in gof_result.statistics if s.name == "distance")
 
 println("Geodesic distance GOF:")
 for d in 1:length(dist_gof.observed)
     println("  Distance $d: obs=$(dist_gof.observed[d]), ",
-            "sim=$(round(dist_gof.simulated_mean[d], digits=1))")
+            "sim=$(round(mean(dist_gof.simulated[:, d]), digits=1))")
 end
 ```
 
@@ -154,8 +169,8 @@ g3 = gof(r3; n_sim=50)
 
 # Compare degree GOF across models
 for (i, g) in enumerate([g1, g2, g3])
-    mean_p = mean(g.results[:degree].p_values)
-    println("Model $i degree GOF mean p-value: $(round(mean_p, digits=3))")
+    deg = only(s for s in g.statistics if s.name == "degree")
+    println("Model $i degree GOF mean p-value: $(round(mean(deg.p_values), digits=3))")
 end
 ```
 
@@ -185,8 +200,15 @@ The diagnostics return:
 |-------|-------------|-------------|
 | `term_names` | Names of model terms | — |
 | `autocorrelation` | Lag-1 autocorrelation per term | Close to 0 |
-| `effective_sample_size` | ESS per term | > 100 |
+| `effective_sample_size` | ESS from the lag-1 autocorrelation (most optimistic estimate) | > 100 |
+| `ess_geyer` | Geyer initial-sequence ESS, using all lags (preferred) | > 100 |
+| `geweke_z`, `geweke_p` | Geweke stationarity z-scores (first 10% vs last 50%) and two-sided p-values | `geweke_p` not small |
 | `n_samples` | Total MCMC samples | — |
+
+Prefer `ess_geyer` over the lag-1 `effective_sample_size`: the
+initial-sequence estimator accounts for autocorrelation at all lags. A
+small `geweke_p` flags a chain that had not reached stationarity —
+increase `burnin`.
 
 ### Interpreting Results
 
@@ -256,9 +278,9 @@ println("Converged: ", result.converged)
 gof_result = gof(result; n_sim=100, stats=[:degree, :esp, :distance])
 
 # 3. Summarize GOF
-for (stat_name, stat_result) in gof_result.results
-    mean_p = mean(stat_result.p_values)
-    println("$stat_name GOF (mean p): $(round(mean_p, digits=3))")
+for stat in gof_result.statistics
+    mean_p = mean(stat.p_values)
+    println("$(stat.name) GOF (mean p): $(round(mean_p, digits=3))")
 end
 
 # 4. MCMC diagnostics (if MCMLE)

@@ -21,8 +21,8 @@ ERGM.jl organizes terms into three categories:
 
 | Type | Description | Examples |
 |------|-------------|----------|
-| `StructuralTerm` | Network topology only | Edges, Triangle, GWESP |
-| `NodalTerm` | Vertex attribute effects | NodeMatch, NodeCov |
+| `StructuralTerm` | Network topology only | Edges, Triangle, GWESP, GWDSP, Degree |
+| `NodalTerm` | Vertex attribute effects | NodeFactor, NodeMatch, NodeMix, NodeCov |
 | `DyadicTerm` | Dyad-level covariates | EdgeCov |
 
 ## Structural Terms
@@ -162,23 +162,104 @@ $$\text{GWDegree} = \sum_{\text{vertices}} e^\alpha \left(1 - (1 - e^{-\alpha})^
 
 **Interpretation**: A positive coefficient indicates a preference for more even degree distributions (anti-preferential attachment). Preferred over `Kstar` for stability.
 
+For directed networks `GWDegree` weights **out**-degrees. Use the directed
+variants to model in- and out-degree distributions separately, matching
+statnet's `gwidegree`/`gwodegree` (both with `fixed=TRUE`):
+
+<!-- skip-check -->
+```julia
+GWIDegree(0.5)   # geometrically weighted in-degree, "gwideg.fixed.0.5"
+GWODegree(0.5)   # geometrically weighted out-degree, "gwodeg.fixed.0.5"
+```
+
+Both are defined only for directed networks.
+
+### GWDSP (Geometrically Weighted Dyadwise Shared Partners)
+
+The shared-partner analogue of `GWESP` summed over *all dyads* — tied or
+not — instead of over edges only (statnet's `gwdsp(decay, fixed=TRUE)`):
+
+<!-- skip-check -->
+```julia
+GWDSP()                  # default decay = 0.5
+GWDSP(0.8)               # custom decay
+GWDSP(0.5; type=:OSP)    # directed shared-partner type, as for GWESP
+```
+
+For directed networks `type` selects the shared-partner definition
+(`:OTP` outgoing two-path — the default, `:ITP`, `:OSP`, `:ISP`, or the
+non-statnet `:union`), with statnet's `dgwdsp` conventions: the sum runs
+over ordered dyads for the two-path types and unordered dyads for the
+symmetric `:OSP`/`:ISP` types. For dyadwise shared partners `:OTP` and
+`:ITP` yield the same statistic.
+
+**Interpretation**: `GWESP` captures closure among *connected* dyads;
+`GWDSP` captures the prevalence of two-paths regardless of whether the
+dyad is tied. Including both separates "friends of friends" (open
+two-paths) from actual triadic closure.
+
+### Degree, IDegree, ODegree
+
+The number of vertices with a given (in-/out-)degree — statnet's
+`degree(d)`, `idegree(d)`, `odegree(d)`:
+
+<!-- skip-check -->
+```julia
+Degree(1)      # undirected networks only: count of degree-1 vertices
+IDegree(0)     # directed only: count of in-degree-0 vertices
+ODegree(2)     # directed only: count of out-degree-2 vertices
+```
+
+As in statnet, `Degree` is only defined for undirected networks — use
+`IDegree`/`ODegree` on directed networks. A vector or range produces one
+term per degree, so the statnet formula `~ edges + degree(0:2)` becomes:
+
+<!-- skip-check -->
+```julia
+fit_ergm(net, [Edges(); Degree(0:2)])
+```
+
+**Interpretation**: Degree-count terms model specific features of the
+degree distribution exactly (e.g. `Degree(0)` for the number of
+isolates). For a smooth overall degree effect prefer the geometrically
+weighted terms.
+
 ## Nodal Attribute Terms
 
 These incorporate vertex-level attributes for modeling homophily and covariate effects.
 
 ### NodeFactor
 
-Main effect of a categorical vertex attribute. Counts edges incident to nodes with a specific attribute value.
+Main effect of a categorical vertex attribute (R ergm's `nodefactor`): for each included attribute level, the number of times a vertex with that level appears as an endpoint of an edge (edges within the level count twice).
 
 ```julia
-# Effect of all levels
+# One statistic per level, first (sorted) level dropped as the reference
+# — exactly like R's nodefactor("gender")
 NodeFactor(:gender)
 
-# Effect of a specific level
+# Keep all levels (statnet's base=0 / levels=TRUE)
+NodeFactor(:gender; base=0)
+
+# Choose the included levels explicitly, in order
+NodeFactor(:gender; levels=["F"])
+
+# A single-level term directly (no expansion)
 NodeFactor(:gender; level="F")
 ```
 
-**Interpretation**: A positive coefficient for level "F" means that female actors form more ties than expected by chance.
+The levels are resolved from the network at model construction, where the
+multi-level term expands into per-level statistics named
+`"nodefactor.<attr>.<level>"`.
+
+!!! warning "Changed in 0.2"
+    `NodeFactor(attr)` previously produced a *single* statistic counting
+    the endpoint appearances of every vertex with the attribute — which is
+    collinear with `Edges` by construction (every edge has two endpoints),
+    so models with both were unidentified. It now matches statnet: one
+    statistic per attribute level, with the first (sorted) level dropped
+    as the reference category. Pass `base=0` to keep all levels.
+
+**Interpretation**: A positive coefficient for level "F" means that female actors form more ties than actors in the reference category.
 
 ### NodeCov
 
@@ -229,6 +310,35 @@ NodeMismatch(:gender)
 ```
 
 **Interpretation**: A positive coefficient means actors prefer different-type partners.
+
+### NodeMix
+
+Mixing-matrix cell counts for a categorical vertex attribute (R ergm's `nodemix`): one statistic per mixing cell, counting the edges whose endpoint levels fall in that cell.
+
+```julia
+# One statistic per mixing cell, first cell dropped as the reference
+# (statnet's levels2=-1 default)
+NodeMix(:gender)
+
+# Keep every cell
+NodeMix(:gender; levels2=0)
+
+# Select cells by index into the statnet-ordered cell list
+NodeMix(:gender; levels2=[2, 3])
+
+# A single cell directly (tail level, head level for directed networks)
+NodeMix(:gender, "F", "M")
+```
+
+Cells follow statnet's ordering over the sorted levels — unordered pairs
+`(u_i, u_j)`, `i ≤ j`, in column-major order for undirected networks, all
+ordered (tail, head) pairs for directed ones — and the statistics are
+named `"mix.<attr>.<l1>.<l2>"`. Like `NodeFactor`, the multi-cell term
+expands into per-cell statistics at model construction.
+
+**Interpretation**: Each coefficient measures the propensity of ties in
+that particular level combination relative to the reference cell — a full
+mixing structure, generalizing `NodeMatch`/`NodeMismatch`.
 
 ### AbsDiff
 
@@ -333,9 +443,12 @@ println("Change statistics: ", deltas)
 | What is the baseline density? | Edges |
 | Is there reciprocity? | Mutual |
 | Does the network cluster? | Triangle, GWESP |
-| Is the degree distribution uneven? | Kstar, GWDegree |
+| Are two-paths prevalent (tied or not)? | GWDSP |
+| Is the degree distribution uneven? | Kstar, GWDegree, GWIDegree, GWODegree |
+| Are specific degrees over-represented (e.g. isolates)? | Degree, IDegree, ODegree |
 | Is there attribute homophily? | NodeMatch, AbsDiff |
 | Do attributes affect sociality? | NodeFactor, NodeCov |
+| Is there a full mixing structure between groups? | NodeMix |
 | Do spatial/dyadic factors matter? | EdgeCov |
 
 ### Best Practices

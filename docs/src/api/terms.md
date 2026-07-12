@@ -13,7 +13,13 @@ Triangle
 Kstar
 TwoPath
 GWESP
+GWDSP
 GWDegree
+GWIDegree
+GWODegree
+Degree
+IDegree
+ODegree
 ```
 
 ## Nodal Attribute Terms
@@ -25,6 +31,7 @@ NodeFactor
 NodeCov
 NodeMatch
 NodeMismatch
+NodeMix
 AbsDiff
 ```
 

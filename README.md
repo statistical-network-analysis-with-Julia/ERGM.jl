@@ -23,14 +23,18 @@ This package is a Julia port of the R `ergm` package from the StatNet collection
 ## Installation
 
 Requires Julia 1.12+. ERGM.jl depends on the unregistered
-[Network.jl](https://github.com/statistical-network-analysis-with-Julia/Network.jl)
-package, which must be added first:
+[Network.jl](https://github.com/statistical-network-analysis-with-Julia/Network.jl) package, which must be added first:
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl")
 Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl")
 ```
+
+For development, you can instead clone all ecosystem repositories side by
+side (the monorepo layout) and start Julia with the root workspace project
+(`julia --project=.` in the clone root): the `[sources]` path dependencies
+then wire the packages together with no ordered installs needed.
 
 ## Features
 
@@ -74,23 +78,57 @@ Mutual()             # Reciprocated edges (directed)
 Triangle()           # Triangle count
 Kstar(k)             # k-star count
 TwoPath()            # Two-path count
+Degree(d)            # Vertices with degree exactly d (undirected);
+IDegree(d)           #   in-degree / out-degree variants for directed
+ODegree(d)           #   networks; Degree(0:2) expands to one term per degree
 GWESP(decay)         # Geometrically weighted ESP
                      # (directed: type=:OTP|:ITP|:OSP|:ISP|:union,
                      #  statnet dgwesp semantics, default :OTP)
+GWDSP(decay)         # Geometrically weighted dyadwise shared partners
+                     # (all dyads, tied or not; same directed types)
 GWDegree(decay)      # Geometrically weighted degree
+GWIDegree(decay)     # Geometrically weighted in-degree (directed)
+GWODegree(decay)     # Geometrically weighted out-degree (directed)
 ```
+
+> **Changed in 0.2**: on *directed* networks, `GWESP(decay)` (and `GWDSP`)
+> previously counted either-direction ("union") shared partners while
+> emitting statnet's OTP label `gwesp.fixed.<decay>` — a silently different
+> model. The default is now statnet-compatible `:OTP`; the old statistic is
+> available as `GWESP(decay; type=:union)` under the distinct label
+> `gwesp.union.fixed.<decay>`. Directed models fit with 0.1 produce
+> different coefficients when refit; undirected GWESP is unchanged. See
+> [CHANGELOG.md](CHANGELOG.md).
 
 ### Nodal Terms
 ```julia
-NodeFactor(:attr)           # Categorical node attribute
+NodeFactor(:attr)           # Categorical main effect: one statistic per level,
+                            # first (sorted) level dropped as the reference
+                            # (statnet nodefactor; base=0 keeps all levels)
 NodeCov(:attr)              # Continuous node attribute
 NodeMatch(:attr)            # Uniform homophily on attribute
 NodeMatch(:attr; diff=true, level="A")  # Differential (per-level) homophily,
                                         # as in R nodematch(diff=TRUE):
                                         # one term per attribute level
 NodeMismatch(:attr)         # Mismatched-edges count (heterophily)
+NodeMix(:attr)              # Mixing-matrix cell counts (statnet nodemix;
+                            # first cell dropped as the reference)
 AbsDiff(:attr)              # Absolute difference effect
 ```
+
+> **Changed in 0.2**: `NodeFactor(attr)` previously produced a single
+> statistic counting endpoint appearances across *all* levels — collinear
+> with `Edges()` by construction. It now matches statnet: one statistic
+> per level with the first (sorted) level as the reference. Pass `base=0`
+> for the old all-levels behavior (as separate per-level statistics).
+
+> **Changed in 0.2**: `NodeMatch(attr; diff=true)` previously counted
+> *mismatching* dyads — the opposite of R, where `nodematch(diff=TRUE)`
+> means differential (per-level) homophily. `diff=true` is now
+> R-compatible per-level homophily (`nodematch.<attr>.<level>` naming, and
+> it requires `level=` rather than guessing); the old mismatch statistic
+> moved to the new `NodeMismatch(attr)` term. See
+> [CHANGELOG.md](CHANGELOG.md) for the full 0.2 migration notes.
 
 ### Dyadic Terms
 <!-- skip-check -->
@@ -184,9 +222,15 @@ the caller's `rng`, so results are also independent of the thread count.
 
 ## Goodness-of-Fit
 
+`gof` is a method of the ecosystem-wide `Network.gof` generic — the same
+verb works on every fitted model in the ecosystem. For directed networks
+the degree comparison is split into in- and out-degree distributions
+(`:idegree`/`:odegree`), as in R ergm:
+
 ```julia
 # GOF diagnostics
 gof_result = gof(result; stats=[:degree, :esp, :distance])
+# on a directed fit, :degree yields the :idegree and :odegree panels
 
 # MCMC diagnostics (requires an MCMLE fit; throws an
 # ArgumentError for MPLE fits, which have no MCMC samples)

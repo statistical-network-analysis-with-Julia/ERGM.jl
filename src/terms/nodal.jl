@@ -467,20 +467,25 @@ function _nodemix_cells(term::NodeMix, net)
     end
 
     sel = term.levels2
-    if !isempty(sel)
-        all(s -> 1 <= abs(s) <= length(cells), sel) ||
+    if isempty(sel)
+        selected = cells
+    else
+        # `ncells` (never rebound) is what the closure captures; rebinding
+        # `cells` itself while captured would box it (Core.Box).
+        ncells = length(cells)
+        all(s -> 1 <= abs(s) <= ncells, sel) ||
             throw(ArgumentError("mix.$(term.attr): levels2 indices must lie in " *
-                                "1:$(length(cells)) (got $(sel))"))
+                                "1:$(ncells) (got $(sel))"))
         if sel[1] > 0
-            cells = cells[sel]
+            selected = cells[sel]
         else
             drop = Set(-s for s in sel)
-            cells = [c for (k, c) in enumerate(cells) if !(k in drop)]
+            selected = [c for (k, c) in enumerate(cells) if !(k in drop)]
         end
     end
-    isempty(cells) &&
+    isempty(selected) &&
         throw(ArgumentError("mix.$(term.attr): no mixing cells selected"))
-    return cells
+    return selected
 end
 
 # Whether an edge (i-level, j-level) pair counts toward a single cell. For
