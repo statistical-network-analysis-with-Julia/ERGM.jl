@@ -1,5 +1,9 @@
 # Types API Reference
 
+```@meta
+CurrentModule = ERGM
+```
+
 This page documents the core data types in ERGM.jl.
 
 ## Abstract Term Types
@@ -95,7 +99,7 @@ summary_stats
 ## Result Accessors
 
 ```@docs
-coef
-stderror
-vcov
+coef(::ERGMResult)
+stderror(::ERGMResult)
+vcov(::ERGMResult)
 ```

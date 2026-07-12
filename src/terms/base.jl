@@ -314,8 +314,28 @@ function _n_dyads(model::ERGMModel)
     return total - n_missing_dyads(model.network)
 end
 
+"""
+    coef(result::ERGMResult) -> Vector{Float64}
+
+Estimated coefficients of the fitted model (a method of `StatsAPI.coef`).
+"""
 StatsAPI.coef(result::ERGMResult) = result.coefficients
+
+"""
+    stderror(result::ERGMResult) -> Vector{Float64}
+
+Standard errors of the coefficient estimates (a method of
+`StatsAPI.stderror`); their type is recorded in `result.se_type`
+(`:hessian`, `:bootstrap`, or `:mcmc`).
+"""
 StatsAPI.stderror(result::ERGMResult) = result.std_errors
+
+"""
+    vcov(result::ERGMResult) -> Matrix{Float64}
+
+Variance-covariance matrix of the coefficient estimates (a method of
+`StatsAPI.vcov`).
+"""
 StatsAPI.vcov(result::ERGMResult) = result.vcov
 StatsAPI.loglikelihood(result::ERGMResult) = result.loglik
 StatsAPI.aic(result::ERGMResult) = result.aic

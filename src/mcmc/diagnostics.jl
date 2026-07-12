@@ -43,7 +43,7 @@ either-direction count).
 A `Network.GOFResult` with one `GOFStatistic` panel per requested statistic
 (named `"degree"`, `"idegree"`, `"odegree"`, `"esp"`, `"distance"`).
 Per-level p-values are two-sided Monte-Carlo p-values computed with the
-shared `(1 + k)/(N + 1)` estimator ([`Network.mc_pvalue`](@ref)), so they
+shared `(1 + k)/(N + 1)` estimator (`Network.mc_pvalue`), so they
 are never exactly zero. `show` renders the observed value, simulation
 envelope, and p-value per level.
 """
@@ -324,7 +324,7 @@ NamedTuple with one entry per model statistic:
   `n(1−ρ₁)/(1+ρ₁)` estimate, kept for backward compatibility — it is the
   most optimistic of the two ESS columns)
 - `ess_geyer`: Geyer initial-sequence ESS, accounting for autocorrelation
-  at all lags (preferred; see [`_geyer_ess`](@ref))
+  at all lags (preferred; see `_geyer_ess`)
 - `geweke_z`, `geweke_p`: Geweke convergence z-scores comparing the first
   10% of the chain against the last 50%, and their two-sided normal
   p-values — small p-values flag a chain that had not reached
