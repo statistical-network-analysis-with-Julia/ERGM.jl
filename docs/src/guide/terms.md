@@ -6,6 +6,7 @@ ERGM terms are the building blocks of an ERGM. Each term computes a network stat
 
 All terms implement three methods:
 
+<!-- skip-check -->
 ```julia
 compute(term, net) -> Float64
 change_stat(term, net, i, j) -> Float64
@@ -26,7 +27,15 @@ ERGM.jl organizes terms into three categories:
 
 ## Structural Terms
 
-These capture patterns in the network topology without reference to node attributes.
+These capture patterns in the network topology without reference to node attributes. The examples below assume the packages are loaded and a small example network exists:
+
+```julia
+using Network, ERGM
+
+net = network(3; directed=true)
+add_edge!(net, 1, 2)
+set_edge_attribute!(net, :distance, 1, 2, 1.5)
+```
 
 ### Edges
 
@@ -111,6 +120,22 @@ $$\text{GWESP} = \sum_{\text{edges}} e^\alpha \left(1 - (1 - e^{-\alpha})^s\righ
 
 **Parameter α** (decay): Controls how quickly additional shared partners are downweighted. Higher α = less downweighting.
 
+**Directed networks**: `type` selects the shared-partner definition for each directed edge $i \to j$, matching statnet's `dgwesp` types:
+
+```julia
+GWESP(0.5)               # :OTP — outgoing two-path i→k→j (statnet's directed default)
+GWESP(0.5; type=:ITP)    # incoming two-path j→k→i
+GWESP(0.5; type=:OSP)    # outgoing shared partner i→k←... i.e. i→k and j→k
+GWESP(0.5; type=:ISP)    # incoming shared partner k→i and k→j
+GWESP(0.5; type=:union)  # either-direction adjacency (pre-0.2 behavior,
+                         # named "gwesp.union.fixed.<decay>"; not a statnet type)
+```
+
+The coefficient names follow statnet: `"gwesp.fixed.<decay>"` for `:OTP` (and for undirected networks, where `type` is ignored), `"gwesp.ITP.fixed.<decay>"` etc. for the other types.
+
+!!! warning "Changed in 0.2"
+    Directed `GWESP` previously counted either-direction shared partners while carrying statnet's OTP name. The default is now genuinely `:OTP`; use `type=:union` to reproduce the old statistic.
+
 | Decay | Behavior |
 |-------|----------|
 | Small (0.1–0.3) | Strong downweighting — first shared partner matters most |
@@ -175,17 +200,35 @@ NodeCov(:age; transform=:sqrt)   # sqrt(value)
 Homophily effect — tendency for edges between vertices with matching attribute values:
 
 ```julia
-# Homophily (matching)
+# Uniform homophily: one statistic counting all matched edges
 NodeMatch(:gender)
 
-# Heterophily (non-matching)
-NodeMatch(:gender; diff=true)
+# Differential homophily (R's nodematch(diff=TRUE)): one statistic per
+# level, each counting only that level's matched edges. The term system is
+# one-statistic-per-term, so construct one term per level:
+[NodeMatch(:gender; diff=true, level=l) for l in ("F", "M")]
 ```
+
+Statistic names follow R ergm: `"nodematch.gender"` and `"nodematch.gender.F"` / `"nodematch.gender.M"`.
 
 **Interpretation**:
 
 - `NodeMatch` > 0: Homophily — actors prefer same-type partners
 - `NodeMatch` < 0: Heterophily — actors prefer different-type partners
+- With `diff=true`, each level's coefficient measures within-level homophily separately
+
+!!! warning "Changed in 0.2"
+    `NodeMatch(attr; diff=true)` previously counted *mismatched* edges — a different model from R's `nodematch(diff=TRUE)` under the same keyword. `diff=true` now means differential homophily as in R (and requires `level`); the mismatch count is available as `NodeMismatch`.
+
+### NodeMismatch
+
+Heterophily effect — the number of edges whose endpoints have *different* attribute values (this package's pre-0.2 `NodeMatch(...; diff=true)` statistic; it has no R `nodematch` equivalent):
+
+```julia
+NodeMismatch(:gender)
+```
+
+**Interpretation**: A positive coefficient means actors prefer different-type partners.
 
 ### AbsDiff
 

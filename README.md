@@ -45,15 +45,15 @@ Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl"
 using Network
 using ERGM
 
-# Create observed network
-net = Network{Int}(; n=50, directed=false)
-# ... add edges ...
+# Observed network: Padgett's Florentine marriage ties (bundled dataset)
+net = load_dataset(:florentine_marriage)
 
-# Define model terms
+# Define model terms. Attribute-based terms are validated at model
+# construction: a typo'd attribute name throws an ArgumentError listing
+# the attributes that do exist.
 terms = [
     Edges(),
-    Triangle(),
-    NodeMatch(:gender)
+    NodeCov(:wealth)
 ]
 
 # Fit model using MPLE
@@ -67,6 +67,7 @@ sim_nets = simulate_ergm(result; n_sim=100)
 ## Model Terms
 
 ### Structural Terms
+<!-- skip-check -->
 ```julia
 Edges()              # Edge count (density)
 Mutual()             # Reciprocated edges (directed)
@@ -74,6 +75,8 @@ Triangle()           # Triangle count
 Kstar(k)             # k-star count
 TwoPath()            # Two-path count
 GWESP(decay)         # Geometrically weighted ESP
+                     # (directed: type=:OTP|:ITP|:OSP|:ISP|:union,
+                     #  statnet dgwesp semantics, default :OTP)
 GWDegree(decay)      # Geometrically weighted degree
 ```
 
@@ -81,11 +84,16 @@ GWDegree(decay)      # Geometrically weighted degree
 ```julia
 NodeFactor(:attr)           # Categorical node attribute
 NodeCov(:attr)              # Continuous node attribute
-NodeMatch(:attr)            # Homophily on attribute
+NodeMatch(:attr)            # Uniform homophily on attribute
+NodeMatch(:attr; diff=true, level="A")  # Differential (per-level) homophily,
+                                        # as in R nodematch(diff=TRUE):
+                                        # one term per attribute level
+NodeMismatch(:attr)         # Mismatched-edges count (heterophily)
 AbsDiff(:attr)              # Absolute difference effect
 ```
 
 ### Dyadic Terms
+<!-- skip-check -->
 ```julia
 EdgeCov(matrix)      # Edge covariate
 ```
@@ -97,12 +105,57 @@ EdgeCov(matrix)      # Edge covariate
 result = ergm(net, terms; method=:mple)
 
 # Monte Carlo MLE (slower, exact)
-result = ergm(net, terms; method=:mcmle,
-              burnin=10000, interval=1000)
+result = ergm(net, terms; method=:mcmle)
 
 # Access results
 coef(result)         # Coefficients
 stderror(result)     # Standard errors
+```
+
+Model construction fails loudly on user errors: attribute-based terms whose
+vertex attribute does not exist on the network, and intrinsically directed
+terms (e.g. `Mutual()`) on undirected networks, both throw an
+`ArgumentError` (as in R ergm) instead of silently fitting a wrong model.
+
+### Honest MPLE uncertainty
+
+For models with dyad-**dependent** terms (`Triangle()`, `GWESP(...)`, ...)
+the default inverse-Hessian MPLE standard errors are anticonservative —
+the pseudo-likelihood treats dependent dyads as independent observations —
+and `show(result)` prints a caveat (as statnet does). For honest standard
+errors, use the parametric bootstrap or refit with `method=:mcmle`:
+
+```julia
+result = ergm(net, terms; method=:mple, se=:bootstrap, n_boot=100)
+```
+
+For dyad-independent models the pseudo-likelihood is the true likelihood
+and the default SEs are correct (no caveat is printed).
+
+MCMLE's reported log-likelihood (hence AIC/BIC) is estimated by an
+ergm-style path-sampling (bridge) ladder from a dyad-independent reference
+to the fitted coefficients (`bridge_rungs` keyword), which is far more
+accurate than one-jump importance sampling.
+
+### Missing (unobserved) dyads
+
+If dyads of the network are masked as missing with Network.jl's
+`set_missing_dyad!` (tie status unobserved — distinct from "no tie"):
+
+- **MPLE** excludes masked dyads from the design matrix: they are not
+  observed responses, so they contribute no logistic-regression row and
+  `nobs` decreases accordingly. Their face values still condition the
+  change statistics of the observed dyads.
+- **MCMLE and simulation** hold masked dyads fixed at their face value —
+  the MH sampler never toggles them — and `mcmle` emits a one-time warning
+  that it *conditions* on those face values. This is an honest, clearly
+  labeled approximation: full statnet-style missing-data maximum likelihood
+  is not yet implemented.
+
+```julia
+set_missing_dyad!(net, 3, 4)          # 3->4 was not measured
+fit = ergm(net, terms; method=:mple)  # 3->4 excluded from the pseudo-likelihood
+nobs(fit)                             # one fewer observation
 ```
 
 ## Simulation
@@ -115,7 +168,19 @@ sim_nets = simulate_ergm(result; n_sim=100)
 model = ERGMModel(ERGMFormula(terms), net)
 sim_nets = sample_networks(model, coef(result);
                            n_sim=100, burnin=1000)
+
+# Low-level single-chain sampler: sampled sufficient statistics
+# (and optionally networks) from one parameterized MH chain
+using Random
+out = mh_sample(model, coef(result); n_samples=500, rng=Xoshiro(1))
+out.stats            # n_samples × p matrix of sampled statistics
 ```
+
+All sampling and fitting functions accept an `rng::AbstractRNG` keyword;
+runs with the same seed are exactly reproducible. `sample_networks`,
+`simulate_ergm`, and `gof` split their draws over independent chains run
+on separate threads (`n_chains` keyword), seeded deterministically from
+the caller's `rng`, so results are also independent of the thread count.
 
 ## Goodness-of-Fit
 
@@ -123,9 +188,18 @@ sim_nets = sample_networks(model, coef(result);
 # GOF diagnostics
 gof_result = gof(result; stats=[:degree, :esp, :distance])
 
-# MCMC diagnostics
-mcmc_diagnostics(result)
+# MCMC diagnostics (requires an MCMLE fit; throws an
+# ArgumentError for MPLE fits, which have no MCMC samples)
+mcmle_result = ergm(net, terms; method=:mcmle)
+mcmc_diagnostics(mcmle_result)
 ```
+
+## Shared optimization utility
+
+`newton_fit(loglik_grad_hess, θ0)` is a public Newton–Raphson maximizer
+with step halving for packages building likelihood-based network models on
+top of ERGM.jl: pass a function `θ -> (ll, grad, hess)` and get back
+`(θ, se, vcov, loglik, converged, iterations)`.
 
 ## Change Statistics
 
@@ -134,6 +208,7 @@ change statistic `g(y⁺ᵢⱼ) − g(y⁻ᵢⱼ)` — the statistic with edge (
 minus the statistic with it absent. Its value does not depend on whether the
 edge currently exists:
 
+<!-- skip-check -->
 ```julia
 # Change in statistic from adding edge (i,j), given the rest of the network
 delta = change_stat(term, net, i, j)

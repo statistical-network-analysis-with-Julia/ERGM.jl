@@ -45,7 +45,7 @@ ERGMs are widely used in:
 
 ## Features
 
-- **Rich term library**: Structural terms (edges, triangles, k-stars, GWESP, GWDegree), nodal attribute terms (nodefactor, nodecov, nodematch, absdiff), and dyadic terms (edgecov)
+- **Rich term library**: Structural terms (edges, triangles, k-stars, GWESP with statnet's directed OTP/ITP/OSP/ISP shared-partner types, GWDegree), nodal attribute terms (nodefactor, nodecov, nodematch with per-level differential homophily, nodemismatch, absdiff), and dyadic terms (edgecov)
 - **Two estimation methods**: MPLE for fast approximation and MCMLE for accurate maximum likelihood
 - **Network simulation**: Simulate networks from fitted models via MCMC
 - **Goodness-of-fit diagnostics**: Compare observed vs. simulated degree, ESP, and geodesic distance distributions
@@ -72,7 +72,7 @@ Pkg.develop(path="/path/to/ERGM.jl")
 using Network, ERGM
 
 # Create a network
-net = Network{Int}(; n=30, directed=false)
+net = network(30; directed=false)
 for (i, j) in [(1,2), (1,3), (2,3), (2,4), (3,4), (3,5), (4,5),
                 (5,6), (6,7), (7,8), (8,9), (9,10)]
     add_edge!(net, i, j)

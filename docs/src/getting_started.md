@@ -28,7 +28,7 @@ Networks are represented using the `Network` type from Network.jl:
 using Network, ERGM
 
 # Create an undirected network with 10 nodes
-net = Network{Int}(; n=10, directed=false)
+net = network(10; directed=false)
 
 # Add edges
 add_edge!(net, 1, 2)
@@ -63,7 +63,7 @@ set_vertex_attribute!(net, :age, Dict(
 
 ```julia
 # Create a directed network
-dnet = Network{Int}(; n=5, directed=true)
+dnet = network(5; directed=true)
 add_edge!(dnet, 1, 2)
 add_edge!(dnet, 2, 1)  # Reciprocated tie
 add_edge!(dnet, 1, 3)
@@ -89,7 +89,7 @@ ERGM.jl provides terms organized by type:
 |----------|-------|-------------|
 | **Structural** | `Edges`, `Mutual`, `Triangle`, `Kstar`, `TwoPath` | Network topology |
 | **Geometrically Weighted** | `GWESP`, `GWDegree` | Downweighted structural terms |
-| **Nodal** | `NodeFactor`, `NodeCov`, `NodeMatch`, `AbsDiff` | Vertex attribute effects |
+| **Nodal** | `NodeFactor`, `NodeCov`, `NodeMatch`, `NodeMismatch`, `AbsDiff` | Vertex attribute effects |
 | **Dyadic** | `EdgeCov` | Dyad-level covariate effects |
 
 ### Example: Comprehensive Model
@@ -212,11 +212,12 @@ Coefficients are **log-odds ratios** for the conditional probability of an edge:
 ```julia
 using Network, ERGM
 using Random
+using Statistics
 
 Random.seed!(42)
 
 # Create a small social network
-net = Network{Int}(; n=15, directed=false)
+net = network(15; directed=false)
 
 # Add edges forming a clustered structure
 for (i, j) in [(1,2), (1,3), (2,3), (2,4), (3,4),    # Cluster 1

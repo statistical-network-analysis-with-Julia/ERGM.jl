@@ -22,7 +22,19 @@ mple
 mcmle
 ```
 
+### newton_fit
+
+```@docs
+newton_fit
+```
+
 ## Simulation
+
+### mh_sample
+
+```@docs
+mh_sample
+```
 
 ### simulate_ergm
 
@@ -34,6 +46,14 @@ simulate_ergm
 
 ```@docs
 sample_networks
+```
+
+## Utilities
+
+### is_dyad_dependent
+
+```@docs
+is_dyad_dependent
 ```
 
 ## Diagnostics

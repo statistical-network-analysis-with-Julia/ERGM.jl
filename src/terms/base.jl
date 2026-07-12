@@ -167,19 +167,33 @@ struct ERGMFormula
     terms::TermSet
     constraints::Vector{ConstraintTerm}
 
-    function ERGMFormula(terms::Vector{<:AbstractERGMTerm};
+    function ERGMFormula(terms::TermSet;
                          constraints::Vector{<:ConstraintTerm}=ConstraintTerm[])
-        new(TermSet(terms), constraints)
+        new(terms, constraints)
     end
 end
+
+ERGMFormula(terms::Vector{<:AbstractERGMTerm};
+            constraints::Vector{<:ConstraintTerm}=ConstraintTerm[]) =
+    ERGMFormula(TermSet(terms); constraints=constraints)
 
 """
     ERGMModel
 
 An ERGM model specification with observed network.
 
+Construction validates the formula against the network — every
+attribute-based term's vertex attribute must exist on the network, and
+intrinsically directed terms (e.g. `Mutual`) are rejected on undirected
+networks — throwing an `ArgumentError` otherwise. Attribute-based nodal
+terms are then *materialized*: their attribute values are snapshotted into
+dense typed vectors (see `src/terms/materialize.jl`) so that change
+statistics in the estimation and sampling hot loops avoid the untyped
+attribute storage. Materialized terms keep the original term names and
+semantics.
+
 # Fields
-- `formula::ERGMFormula`: Model formula
+- `formula::ERGMFormula`: Model formula (with materialized terms)
 - `network::Network`: Observed network
 - `directed::Bool`: Whether the model is for directed networks
 - `reference::Symbol`: Reference measure (:bernoulli by default)
@@ -192,7 +206,10 @@ struct ERGMModel{T}
 
     function ERGMModel(formula::ERGMFormula, net::Network{T};
                        reference::Symbol=:bernoulli) where T
-        new{T}(formula, net, is_directed(net), reference)
+        _validate_formula(formula.terms, net)
+        mformula = ERGMFormula(_materialize(formula.terms, net);
+                               constraints=formula.constraints)
+        new{T}(mformula, net, is_directed(net), reference)
     end
 end
 
@@ -215,6 +232,9 @@ Results from fitting an ERGM.
 - `converged::Bool`: Convergence status
 - `mcmc_samples::Union{Nothing, Matrix{Float64}}`: Statistics sampled at the
   final coefficient values (for MCMLE)
+- `se_type::Symbol`: How the standard errors were obtained (`:hessian` for
+  inverse observed information, `:bootstrap` for parametric bootstrap,
+  `:mcmc` for the inverse Fisher information estimated from MCMC samples)
 """
 struct ERGMResult{T}
     model::ERGMModel{T}
@@ -229,7 +249,15 @@ struct ERGMResult{T}
     method::Symbol
     converged::Bool
     mcmc_samples::Union{Nothing, Matrix{Float64}}
+    se_type::Symbol
 end
+
+# Backward-compatible constructor from before `se_type` existed
+ERGMResult(model, coefficients, std_errors, z_values, p_values, vcov,
+           loglik, aic, bic, method, converged, mcmc_samples) =
+    ERGMResult(model, coefficients, std_errors, z_values, p_values, vcov,
+               loglik, aic, bic, method, converged, mcmc_samples,
+               method === :mcmle ? :mcmc : :hessian)
 
 function Base.show(io::IO, result::ERGMResult)
     println(io, "ERGM Results")
@@ -240,23 +268,57 @@ function Base.show(io::IO, result::ERGMResult)
     println(io, "Converged: $(result.converged)")
     println(io)
     println(io, "Coefficients:")
-    println(io, "-"^60)
 
-    term_names = result.model.formula.terms.names
-    for (i, tname) in enumerate(term_names)
-        sig = result.p_values[i] < 0.001 ? "***" :
-              result.p_values[i] < 0.01 ? "**" :
-              result.p_values[i] < 0.05 ? "*" :
-              result.p_values[i] < 0.1 ? "." : ""
-        println(io, "$(rpad(tname, 20)) $(lpad(round(result.coefficients[i], digits=4), 10)) " *
-                    "$(lpad(round(result.std_errors[i], digits=4), 10)) " *
-                    "$(lpad(round(result.p_values[i], digits=4), 10)) $sig")
+    # Shared ecosystem presentation layer (Network.print_coeftable):
+    # Estimate / Std.Error / z value / Pr(>|z|) with significance codes
+    print_coeftable(io, result.model.formula.terms.names,
+                    result.coefficients, result.std_errors, result.p_values;
+                    z_values=result.z_values)
+
+    # Honest-uncertainty caveat: pseudo-likelihood fits of dyad-dependent
+    # models have suspect inverse-Hessian standard errors (statnet prints an
+    # analogous warning). Dyad-independent formulas need no caveat — there
+    # the pseudo-likelihood is the likelihood.
+    if result.method == :mple &&
+       any(is_dyad_dependent(t) for t in result.model.formula.terms)
+        println(io)
+        if result.se_type == :bootstrap
+            println(io, "Note: this model contains dyad-dependent terms and was fit by maximum")
+            println(io, "pseudolikelihood (MPLE). Standard errors are parametric-bootstrap")
+            println(io, "estimates; the MPLE point estimates may still be biased. Consider")
+            println(io, "refitting with method=:mcmle.")
+        else
+            println(io, "Warning: this model contains dyad-dependent terms and was fit by")
+            println(io, "maximum pseudolikelihood (MPLE). The standard errors are based on the")
+            println(io, "naive pseudolikelihood and are suspect (typically anticonservative);")
+            println(io, "the p-values should not be trusted. Refit with method=:mcmle, or use")
+            println(io, "se=:bootstrap for parametric-bootstrap standard errors.")
+        end
     end
-    println(io, "-"^60)
-    println(io, "Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1")
 end
 
-# Accessor functions
-coef(result::ERGMResult) = result.coefficients
-stderror(result::ERGMResult) = result.std_errors
-vcov(result::ERGMResult) = result.vcov
+# StatsAPI interface: methods on the shared statistics generics, so results
+# interoperate with StatsBase/GLM-style tooling (`coef(fit)`, `aic(fit)`, ...)
+
+"""
+    _n_dyads(model::ERGMModel) -> Int
+
+Number of observed free dyads in the model's network (ordered pairs for
+directed networks, unordered pairs otherwise), excluding dyads masked as
+missing via `Network.set_missing_dyad!` — their tie status is unobserved,
+so they are not observations.
+"""
+function _n_dyads(model::ERGMModel)
+    n = Int(nv(model.network))
+    total = model.directed ? n * (n - 1) : n * (n - 1) ÷ 2
+    return total - n_missing_dyads(model.network)
+end
+
+StatsAPI.coef(result::ERGMResult) = result.coefficients
+StatsAPI.stderror(result::ERGMResult) = result.std_errors
+StatsAPI.vcov(result::ERGMResult) = result.vcov
+StatsAPI.loglikelihood(result::ERGMResult) = result.loglik
+StatsAPI.aic(result::ERGMResult) = result.aic
+StatsAPI.bic(result::ERGMResult) = result.bic
+StatsAPI.nobs(result::ERGMResult) = _n_dyads(result.model)
+StatsAPI.dof(result::ERGMResult) = length(result.coefficients)

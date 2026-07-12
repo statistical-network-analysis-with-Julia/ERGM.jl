@@ -23,6 +23,17 @@ MPLE treats each potential edge as an independent observation and fits a logisti
 $$\text{logit}\left(P(Y_{ij} = 1 \mid Y_{-ij})\right) = \theta^\top \delta(y)_{ij}$$
 
 ```julia
+using Network, ERGM
+using Random
+
+Random.seed!(42)
+
+# Example network: Florentine marriage ties with a categorical attribute
+net = load_dataset(:florentine_marriage)
+set_vertex_attribute!(net, :gender,
+    Dict(v => (isodd(v) ? "F" : "M") for v in 1:nv(net)))
+terms = [Edges(), GWESP(0.5), NodeMatch(:gender)]
+
 result = ergm(net, terms; method=:mple)
 ```
 
@@ -56,8 +67,36 @@ The logistic regression is solved via LBFGS optimization (from Optim.jl), with n
 | Speed | Very fast — single optimization |
 | Consistency | Consistent for dyadic independence models |
 | Bias | Can be biased for models with strong dependencies |
-| Standard errors | May underestimate SEs for dependent models |
+| Standard errors | Anticonservative (too small) for dependent models |
 | Use case | Exploration, initial estimates, independent-dyad models |
+
+### Honest MPLE Uncertainty
+
+For **dyad-independent** models (only `Edges` plus nodal/dyadic covariate
+terms) the pseudo-likelihood *is* the likelihood, and the default
+inverse-Hessian standard errors are correct.
+
+For models with **dyad-dependent** terms (`Triangle`, `GWESP`, `Mutual`,
+...) the pseudo-likelihood treats dependent dyads as independent
+observations, so the inverse-Hessian standard errors are typically
+anticonservative and the p-values too optimistic. `show(result)` prints a
+caveat in this case (mirroring statnet's warning). Two remedies:
+
+```julia
+# Parametric-bootstrap standard errors: simulate n_boot networks at the
+# MPLE, refit the MPLE on each, use the empirical covariance
+result_boot = ergm(net, terms; method=:mple, se=:bootstrap, n_boot=100,
+                   rng=Xoshiro(1))
+result_boot.se_type   # :bootstrap
+
+# Or refit with full MCMC maximum likelihood
+result_mcmle = ergm(net, terms; method=:mcmle)
+```
+
+Note the bootstrap fixes the *standard errors*, not the MPLE point
+estimates, which can themselves be biased under strong dependence —
+`method=:mcmle` addresses both. Which terms count as dyad-dependent is
+queryable with [`is_dyad_dependent`](@ref).
 
 ## Monte Carlo Maximum Likelihood Estimation (MCMLE)
 
@@ -70,7 +109,6 @@ result = ergm(net, terms;
     burnin = 1000,
     interval = 100,
     max_iter = 20,
-    tol = 1e-4,
     verbose = true
 )
 ```
@@ -81,9 +119,16 @@ The algorithm iterates:
 
 1. **Initialize**: Start with MPLE estimates $\theta^{(0)}$
 2. **Sample**: Generate networks from the current model $P_{\theta^{(t)}}$ via Metropolis-Hastings MCMC
-3. **Check convergence**: If $\max|\bar{g}(\text{sim}) - g(\text{obs})| < \text{tol}$, stop
-4. **Update**: Newton-Raphson step: $\theta^{(t+1)} = \theta^{(t)} + \Sigma^{-1}(g(\text{obs}) - \bar{g}(\text{sim}))$
+3. **Check convergence**: at full Hummel step length, stop when every per-statistic convergence t-ratio $(g_{\text{obs}} - \bar{g})/\text{sd}(g)$ is below `conv_threshold` *and* a Hotelling $T^2$ test of the mean difference is non-significant at `hotelling_alpha`
+4. **Update**: partial Newton-Raphson step toward the Hummel pseudo-target: $\theta^{(t+1)} = \theta^{(t)} + \gamma\,\Sigma^{-1}(g(\text{obs}) - \bar{g}(\text{sim}))$, with step length $\gamma$ adapting toward 1 as the sampled statistic cloud covers the observed statistics
 5. **Repeat** until convergence or `max_iter` reached
+
+The reported log-likelihood (and AIC/BIC) is estimated by **path
+sampling**: a `bridge_rungs`-segment ladder from a dyad-independent
+reference distribution (whose normalizer is exact) to $\hat\theta$, with
+the expected statistics at each rung estimated by MCMC and integrated by
+the trapezoid rule — the standard ergm-style bridge estimator. For fully
+dyad-independent models the exact log-likelihood is returned.
 
 ### MCMC Sampling
 
@@ -99,10 +144,16 @@ The sampler uses burn-in to reach stationarity and thinning to reduce autocorrel
 | Parameter | Description | Default | Guidance |
 |-----------|-------------|---------|----------|
 | `n_samples` | MCMC samples per iteration | 1000 | More = better approximation |
-| `burnin` | Steps before sampling | 1000 | Increase if poor mixing |
-| `interval` | Steps between samples | 100 | Increase to reduce autocorrelation |
+| `burnin` | Steps before sampling | `20 × n_dyads` | Increase if poor mixing |
+| `interval` | Steps between samples | `max(100, n_dyads ÷ 10)` | Increase to reduce autocorrelation |
 | `max_iter` | Maximum NR iterations | 20 | Increase for slow convergence |
-| `tol` | Convergence tolerance | 1e-4 | Smaller = stricter convergence |
+| `conv_threshold` | Max allowed convergence t-ratio | 0.1 | Smaller = stricter convergence |
+| `hotelling_alpha` | Level of the Hotelling T² convergence test | 0.05 | — |
+| `rng` | RNG all draws flow from | `Random.default_rng()` | Pass `Xoshiro(seed)` for reproducibility |
+| `bridge_rungs` | Path-sampling segments for the log-likelihood | 16 | More = less bias in AIC/BIC |
+| `bridge_samples` | MCMC samples per bridge rung | `n_samples` | — |
+
+(The `tol` keyword from earlier versions is deprecated and ignored.)
 
 ### MCMLE Strengths and Limitations
 
@@ -113,6 +164,32 @@ The sampler uses burn-in to reach stationarity and thinning to reduce autocorrel
 | Speed | Slower — requires MCMC at each iteration |
 | Initialization | Benefits from good MPLE starting values |
 | Use case | Final results, dependent models |
+
+## Missing (Unobserved) Dyads
+
+Network.jl can mark dyads whose tie status is **unobserved** (statnet-style
+NA ties) with `set_missing_dyad!(net, i, j)` — distinct from "no tie". The
+estimation routines treat the mask as follows:
+
+- **MPLE excludes masked dyads.** An unobserved tie status is not a
+  response, so masked dyads contribute no row to the logistic-regression
+  design; `nobs(result)` shrinks by the number of masked dyads. The masked
+  dyads' face values (edge present/absent as stored) still enter the change
+  statistics of the observed dyads, which are computed conditional on the
+  rest of the network.
+- **MCMLE conditions on face values.** The MH sampler never proposes
+  toggling a masked dyad, so all simulation happens conditional on the
+  stored face values, and the observed sufficient statistics include the
+  masked dyads at face value. `mcmle` emits a one-time warning when the
+  network has masked dyads. This is an honest, clearly labeled
+  approximation — full missing-data maximum likelihood (statnet's approach
+  of integrating over the unobserved dyads) is future work.
+
+```julia
+set_missing_dyad!(net, 3, 4)          # dyad 3->4 was not measured
+fit = ergm(net, terms; method=:mple)  # excluded from the pseudo-likelihood
+nobs(fit)                             # one fewer observation
+```
 
 ## Comparing Methods
 
@@ -146,6 +223,7 @@ The `ERGMResult` object contains:
 | `method` | `Symbol` | `:mple` or `:mcmle` |
 | `converged` | `Bool` | Convergence status |
 | `mcmc_samples` | `Matrix{Float64}` or `nothing` | MCMC samples (MCMLE only) |
+| `se_type` | `Symbol` | `:hessian`, `:bootstrap`, or `:mcmc` — how the SEs were obtained |
 
 ### Accessor Functions
 
@@ -201,10 +279,7 @@ $$\text{logit}(P(Y_{ij} = 1 \mid Y_{-ij})) = \theta^\top \delta(y)_{ij}$$
 ### Confidence Intervals
 
 ```julia
-using Distributions
-
-alpha = 0.05
-z = quantile(Normal(), 1 - alpha/2)
+z = 1.959964  # standard-normal 97.5% quantile, i.e. quantile(Normal(), 0.975)
 
 lower = coef(result) .- z .* stderror(result)
 upper = coef(result) .+ z .* stderror(result)
@@ -313,4 +388,5 @@ result = mcmle(model; n_samples=2000, verbose=true)
 5. **Validate with GOF**: Always run goodness-of-fit diagnostics after estimation
 6. **Use verbose mode**: Monitor MCMLE progress to diagnose convergence issues
 7. **Sufficient network size**: ERGMs require networks with at least ~20 nodes for reliable estimation
-8. **Set random seeds**: For reproducibility in MCMLE
+8. **Set random seeds**: Pass an explicit `rng` (e.g. `rng=Xoshiro(42)`) to `mcmle`/`ergm` — all Monte Carlo draws flow from it, so runs with the same seed are exactly reproducible
+9. **Honest uncertainty**: For dyad-dependent MPLE fits, use `se=:bootstrap` or refit with `method=:mcmle` before interpreting p-values

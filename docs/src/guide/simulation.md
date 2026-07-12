@@ -21,6 +21,11 @@ using Random
 
 Random.seed!(42)
 
+# Example network: Florentine marriage ties with a categorical attribute
+net = load_dataset(:florentine_marriage)
+set_vertex_attribute!(net, :gender,
+    Dict(v => (isodd(v) ? "F" : "M") for v in 1:nv(net)))
+
 # Fit a model
 terms = [Edges(), Triangle(), NodeMatch(:gender)]
 result = ergm(net, terms; method=:mple)
@@ -37,8 +42,25 @@ println("Each with $(nv(sim_nets[1])) nodes")
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `n_sim` | Number of networks to simulate | 1 |
-| `burnin` | MCMC burn-in steps | 10000 |
+| `burnin` | MCMC burn-in steps (per chain) | 10000 |
 | `interval` | Steps between saved samples | 1000 |
+| `rng` | Random number generator all draws flow from | `Random.default_rng()` |
+| `n_chains` | Independent chains run in parallel | `min(n_sim, 4)` |
+
+### Reproducibility and Threading
+
+Every sampling function takes an `rng::AbstractRNG` keyword, and all
+random draws flow from it — two calls with the same rng state return
+identical networks. The `n_sim` draws are split over `n_chains`
+independent chains, run in parallel when Julia has multiple threads; each
+chain's RNG is seeded deterministically from the caller's `rng`, so
+results do not depend on the thread count:
+
+```julia
+sims_a = simulate_ergm(result; n_sim=20, rng=Xoshiro(1))
+sims_b = simulate_ergm(result; n_sim=20, rng=Xoshiro(1))
+# sims_a and sims_b are identical, at any JULIA_NUM_THREADS
+```
 
 ### Choosing Burn-in and Interval
 
@@ -75,6 +97,25 @@ model = ERGMModel(formula, net)
 sim_nets = sample_networks(model, θ; n_sim=50)
 ```
 
+### Low-Level Single-Chain Sampling
+
+[`mh_sample`](@ref) runs one parameterized Metropolis–Hastings chain and
+returns the sampled sufficient statistics (and, optionally, the sampled
+networks). It is the primitive that the estimation routines and downstream
+packages (e.g. ERGMEgo.jl) build on:
+
+```julia
+using Statistics
+
+out = mh_sample(model, θ; n_samples=200, burnin=5000, interval=100,
+                rng=Xoshiro(7))
+size(out.stats)          # (200, 3): one row of g(y) per sample
+mean(out.stats, dims=1)  # E[g] estimate at θ
+
+with_nets = mh_sample(model, θ; n_samples=10, return_networks=true)
+with_nets.networks       # the 10 sampled networks themselves
+```
+
 ### Starting Network
 
 By default, `sample_networks` initializes from a random network matching the observed density. You can provide a custom starting network:
@@ -87,7 +128,7 @@ sim_nets = sample_networks(model, θ;
 )
 
 # Start from an empty network
-empty_net = Network{Int}(; n=nv(net), directed=is_directed(net))
+empty_net = network(nv(net); directed=is_directed(net))
 sim_nets = sample_networks(model, θ;
     n_sim = 50,
     start_net = empty_net
@@ -114,6 +155,15 @@ When no starting network is provided, a random network is created with edge prob
 # The density of the observed network
 density = ne(net) / (nv(net) * (nv(net) - 1) / 2)  # undirected
 ```
+
+### Missing (Unobserved) Dyads
+
+Dyads masked as missing (`set_missing_dyad!`) are never proposed for
+toggling: every sampled network keeps the observed face value at those
+dyads, and random starting networks (`start_net=nothing`) also preserve
+them instead of randomizing. The sampler therefore draws from the model
+*conditional* on the masked dyads' face values. If every dyad is masked,
+sampling throws an `ArgumentError`.
 
 ## Analyzing Simulated Networks
 
@@ -187,15 +237,15 @@ end
 
 ## Computational Notes
 
-- Simulation time scales with `burnin + n_sim × interval` MCMC steps
+- Simulation time scales with `burnin + n_sim × interval` MCMC steps per chain; independent chains run in parallel when Julia has multiple threads (`n_chains` keyword)
 - Each step involves computing change statistics for all terms
 - For large networks, consider reducing `n_sim` or increasing `interval`
 - Simulated networks share the same node count and directedness as the observed network
-- Only edge structure is simulated — vertex and edge attributes are not transferred to simulated networks
+- Vertex and network attributes (and the observed network's settings) are inherited by simulated networks, so attribute-based terms evaluate against the same covariates
 
 ## Best Practices
 
-1. **Set random seeds**: Use `Random.seed!()` for reproducible simulations
+1. **Set random seeds**: Pass an explicit `rng` (e.g. `rng=Xoshiro(42)`) for reproducible simulations
 2. **Adequate burn-in**: Ensure the chain has reached stationarity
 3. **Sufficient thinning**: Reduce autocorrelation between samples
 4. **Compare statistics**: Always compare model statistics between observed and simulated networks

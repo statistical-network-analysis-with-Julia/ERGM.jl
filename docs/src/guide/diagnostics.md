@@ -17,6 +17,15 @@ Even a model that converges successfully may not capture important features of t
 
 ```julia
 using Network, ERGM
+using Random
+using Statistics
+
+Random.seed!(42)
+
+# Example network: Florentine marriage ties with a categorical attribute
+net = load_dataset(:florentine_marriage)
+set_vertex_attribute!(net, :gender,
+    Dict(v => (isodd(v) ? "F" : "M") for v in 1:nv(net)))
 
 # Fit a model
 terms = [Edges(), GWESP(0.5), NodeMatch(:gender)]
@@ -25,6 +34,11 @@ result = ergm(net, terms; method=:mple)
 # Run goodness-of-fit with 100 simulated networks
 gof_result = gof(result; n_sim=100, stats=[:degree, :esp, :distance])
 ```
+
+`gof` also accepts `rng` (all simulation randomness flows from it — same
+seed, same result), `burnin`/`interval` (MCMC controls), and `n_chains`
+(the simulations are split over independent chains run in parallel,
+seeded deterministically from `rng`, so results are thread-count-independent).
 
 ### Available Statistics
 
@@ -159,6 +173,10 @@ result = ergm(net, terms; method=:mcmle, verbose=true)
 diag = mcmc_diagnostics(result)
 ```
 
+`mcmc_diagnostics` requires a fit with MCMC samples. Calling it on an
+MPLE fit throws an `ArgumentError` (MPLE draws no MCMC sample, so there
+is nothing to diagnose) — refit with `method=:mcmle` first.
+
 ### Understanding MCMC Diagnostics
 
 The diagnostics return:
@@ -207,6 +225,7 @@ Where $\rho_j$ is the lag-1 autocorrelation for term $j$.
 
 If diagnostics indicate poor mixing:
 
+<!-- skip-check -->
 ```julia
 # Increase samples and thinning
 result = ergm(net, terms;

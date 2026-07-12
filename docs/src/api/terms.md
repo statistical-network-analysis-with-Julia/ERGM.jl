@@ -24,6 +24,7 @@ Terms incorporating vertex-level attributes.
 NodeFactor
 NodeCov
 NodeMatch
+NodeMismatch
 AbsDiff
 ```
 
