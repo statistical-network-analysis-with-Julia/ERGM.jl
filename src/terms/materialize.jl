@@ -1,15 +1,18 @@
 """
 Model-construction-time term processing.
 
-Three concerns that run once, when an `ERGMModel` is built:
+Two concerns that run once, when an `ERGMModel` is built (the term traits
+they act on are the public protocol in `src/terms/traits.jl`):
 
-1. **Term traits** — small queryable properties of terms
-   ([`is_dyad_dependent`](@ref), `_vertex_attribute`, `_requires_directed`).
-2. **Formula validation** — fail loudly at model construction on user errors
-   that would otherwise produce silently wrong fits: attribute-based terms
-   whose vertex attribute does not exist on the network, and intrinsically
-   directed terms (e.g. `Mutual`) on undirected networks.
-3. **Attribute snapshotting** — attribute-based nodal terms are converted
+1. **Formula validation** — fail loudly at model construction on user errors
+   that would otherwise produce silently wrong fits: terms whose declared
+   vertex/edge attributes ([`required_vertex_attributes`](@ref),
+   [`required_edge_attributes`](@ref)) do not exist on the network, and terms
+   declaring a direction requirement ([`requires_directed`](@ref),
+   [`requires_undirected`](@ref)) that the network does not meet. Because the
+   checks read *traits*, a term from any package — not just ERGM's built-ins
+   — participates in them.
+2. **Attribute snapshotting** — attribute-based nodal terms are converted
    into "materialized" twins that hold dense, concretely typed vectors of
    the attribute values, so change statistics evaluated millions of times in
    the MPLE/MCMC hot loops no longer read the untyped
@@ -17,82 +20,38 @@ Three concerns that run once, when an `ERGMModel` is built:
 """
 
 # ============================================================================
-# Term traits
-# ============================================================================
-
-# The vertex attribute a term reads, or `nothing` for terms that read none.
-# Used to validate formulas against `list_vertex_attributes(net)` and to
-# decide which terms get materialized. Terms from other packages default to
-# `nothing` (no validation, no snapshotting).
-_vertex_attribute(::AbstractERGMTerm) = nothing
-_vertex_attribute(term::NodeFactor) = term.attr
-_vertex_attribute(term::NodeCov) = term.attr
-_vertex_attribute(term::NodeMatch) = term.attr
-_vertex_attribute(term::NodeMismatch) = term.attr
-_vertex_attribute(term::AbsDiff) = term.attr
-_vertex_attribute(term::NodeMix) = term.attr
-
-# Terms that are only defined for directed networks. On an undirected
-# network their statistic would be a structural zero, so model construction
-# rejects them (as R ergm does).
-_requires_directed(::AbstractERGMTerm) = false
-_requires_directed(::Mutual) = true
-_requires_directed(::IDegree) = true
-_requires_directed(::ODegree) = true
-_requires_directed(::GWIDegree) = true
-_requires_directed(::GWODegree) = true
-
-# Terms that are only defined for undirected networks; model construction
-# rejects them on directed networks (as R ergm does).
-_requires_undirected(::AbstractERGMTerm) = false
-_requires_undirected(::Degree) = true
-
-"""
-    is_dyad_dependent(term::AbstractERGMTerm) -> Bool
-
-Whether the term's change statistic depends on the state of other dyads
-(`true` for e.g. `Mutual`, `Triangle`, `Kstar`, `TwoPath`, `GWESP`,
-`GWDegree`) or only on exogenous covariates of the dyad itself (`false` for
-`Edges` and all nodal/dyadic covariate terms).
-
-For dyad-independent models the pseudo-likelihood *is* the likelihood, so
-MPLE is exact; for models with any dyad-dependent term MPLE point estimates
-can be biased and its inverse-Hessian standard errors are typically
-anticonservative (see [`mple`](@ref)).
-
-The fallback for term types this package does not know about is `true`
-(the conservative answer). Packages defining their own dyad-independent
-terms should add a method returning `false`.
-"""
-is_dyad_dependent(::AbstractERGMTerm) = true
-is_dyad_dependent(::Edges) = false
-is_dyad_dependent(::NodalTerm) = false
-is_dyad_dependent(::DyadicTerm) = false
-
-# ============================================================================
 # Formula validation
 # ============================================================================
+
+function _missing_attribute_error(t, kind::String, attr::Symbol, available)
+    avail_str = isempty(available) ? "(none)" :
+        join(sort!([":" * String(a) for a in available]), ", ")
+    throw(ArgumentError(
+        "term '$(name(t))' refers to $kind attribute :$attr, which does " *
+        "not exist on the network. Available $kind attributes: $avail_str."))
+end
 
 # Validate every term of a formula against the observed network. Called by
 # the ERGMModel constructor so user errors surface before any fitting.
 function _validate_formula(terms::TermSet, net)
     available = list_vertex_attributes(net)
+    available_edge = list_edge_attributes(net)
     for t in terms
-        attr = _vertex_attribute(t)
-        if attr !== nothing && !(attr in available)
-            avail_str = isempty(available) ? "(none)" :
-                join(sort!([":" * String(a) for a in available]), ", ")
-            throw(ArgumentError(
-                "term '$(name(t))' refers to vertex attribute :$attr, which does " *
-                "not exist on the network. Available vertex attributes: $avail_str."))
+        for attr in required_vertex_attributes(t)
+            attr in available ||
+                _missing_attribute_error(t, "vertex", attr, available)
         end
-        if _requires_directed(t) && !is_directed(net)
+        for attr in required_edge_attributes(t)
+            attr in available_edge ||
+                _missing_attribute_error(t, "edge", attr, available_edge)
+        end
+        if requires_directed(t) && !is_directed(net)
             throw(ArgumentError(
                 "term '$(name(t))' is only defined for directed networks, but the " *
                 "network is undirected. Remove the term or use a directed network " *
                 "(R ergm raises the same error)."))
         end
-        if _requires_undirected(t) && is_directed(net)
+        if requires_undirected(t) && is_directed(net)
             throw(ArgumentError(
                 "term '$(name(t))' is only defined for undirected networks, but " *
                 "the network is directed. Use the directed in-/out- variant of " *
@@ -337,6 +296,18 @@ const _MaterializedTerm = Union{MaterializedNodeFactor, MaterializedNodeCov,
 
 name(term::_MaterializedTerm) = name(term.base)
 is_dyad_dependent(term::_MaterializedTerm) = is_dyad_dependent(term.base)
+requires_directed(term::_MaterializedTerm) = requires_directed(term.base)
+requires_undirected(term::_MaterializedTerm) = requires_undirected(term.base)
+supports_missing(term::_MaterializedTerm) = supports_missing(term.base)
+
+# A materialized term carries its own dense snapshot of the attribute, so it
+# no longer *needs* one from the network — but it still names it, so that
+# re-validating a materialized formula (e.g. against a simulated copy) keeps
+# the same contract as the raw term.
+required_vertex_attributes(term::_MaterializedTerm) =
+    required_vertex_attributes(term.base)
+required_edge_attributes(term::_MaterializedTerm) =
+    required_edge_attributes(term.base)
 
 # Terms without a materialized twin pass through unchanged. Re-materializing
 # an already-materialized term is also a no-op (its snapshot stays valid for

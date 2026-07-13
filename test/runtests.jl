@@ -1,6 +1,6 @@
 using ERGM
 using LinearAlgebra
-using Network
+using Networks
 using Random
 using Statistics
 using StatsBase
@@ -79,6 +79,23 @@ function set_test_attrs!(net)
         Dict(1 => 20.0, 2 => 35.0, 3 => 28.0, 4 => 51.0, 5 => 42.0, 6 => 33.0, 7 => 60.0))
     return net
 end
+
+# A "third-party" term: it lives outside ERGM.jl's own term hierarchy and
+# declares its requirements purely through the public term-trait protocol
+# (src/terms/traits.jl). Everything ERGM does with it at model construction —
+# attribute validation, direction validation — must follow from the
+# declarations alone, exactly as for a built-in term.
+struct ForeignTerm <: AbstractERGMTerm
+    vattr::Symbol
+    eattr::Symbol
+end
+ERGM.name(t::ForeignTerm) = "foreign.$(t.vattr)"
+ERGM.compute(t::ForeignTerm, net) = Float64(ne(net))
+ERGM.change_stat(t::ForeignTerm, net, i::Int, j::Int) = 1.0
+ERGM.required_vertex_attributes(t::ForeignTerm) = (t.vattr,)
+ERGM.required_edge_attributes(t::ForeignTerm) = (t.eattr,)
+ERGM.requires_directed(::ForeignTerm) = true
+ERGM.is_dyad_dependent(::ForeignTerm) = false
 
 @testset "ERGM.jl" begin
     @testset "Change statistic convention" begin
@@ -787,7 +804,7 @@ end
         result = fit_ergm(net, [Edges()])
         gof_result = gof(result; n_sim=20, stats=[:degree, :esp, :distance])
 
-        # gof extends Network.jl's shared generic and returns the shared
+        # gof extends Networks.jl's shared generic and returns the shared
         # GOFResult container
         @test gof_result isa GOFResult
         @test n_simulations(gof_result) == 20
@@ -920,6 +937,76 @@ end
         # Mutual on a directed network is fine
         dnet = fixture_directed()
         @test ERGMModel(ERGMFormula([Edges(), Mutual()]), dnet) isa ERGMModel
+    end
+
+    @testset "Public term-trait protocol" begin
+        # Built-in declarations
+        @test required_vertex_attributes(NodeCov(:age)) == (:age,)
+        @test required_vertex_attributes(NodeMix(:group)) == (:group,)
+        @test required_vertex_attributes(Edges()) == ()
+        @test required_edge_attributes(Edges()) == ()
+        @test requires_directed(Mutual()) && requires_directed(IDegree(1))
+        @test !requires_directed(Edges())
+        @test requires_undirected(Degree(1)) && !requires_undirected(ODegree(1))
+        @test !is_dyad_dependent(Edges()) && is_dyad_dependent(Triangle())
+        # Terms compute their statistic from face values; the missing-data
+        # treatment lives in the estimators (mple), not in the terms
+        @test !supports_missing(Edges())
+        @test supports_missing(mple)
+
+        # Backward compatibility: the pre-v0.5 private names are aliases of the
+        # SAME generics, so downstream methods declared on them (TERGM.jl ships
+        # `ERGM._requires_directed(::Delrecip) = true`) still drive validation
+        @test ERGM._requires_directed === requires_directed
+        @test ERGM._requires_undirected === requires_undirected
+        @test ERGM._vertex_attribute(NodeCov(:age)) === :age
+        @test ERGM._vertex_attribute(Edges()) === nothing
+
+        # Materialized twins keep their source term's declarations
+        dnet = set_test_attrs!(fixture_directed())
+        mat = ERGMModel(ERGMFormula([NodeCov(:age)]), dnet).formula.terms[1]
+        @test required_vertex_attributes(mat) == (:age,)
+        @test !is_dyad_dependent(mat)
+
+        # A third-party term participates in validation on its declarations
+        # alone: accepted when the network satisfies them ...
+        set_edge_attribute!(dnet, :w, 1, 2, 1.0)
+        term = ForeignTerm(:age, :w)
+        model = ERGMModel(ERGMFormula([Edges(), term]), dnet)
+        @test model.formula.terms.names == ["edges", "foreign.age"]
+
+        # ... rejected, with the standard message, when a declared VERTEX
+        # attribute is absent ...
+        bad_v = try
+            ERGMModel(ERGMFormula([ForeignTerm(:no_such, :w)]), dnet)
+            nothing
+        catch e
+            e
+        end
+        @test bad_v isa ArgumentError
+        @test occursin("vertex attribute :no_such", bad_v.msg)
+
+        # ... when a declared EDGE attribute is absent ...
+        bad_e = try
+            ERGMModel(ERGMFormula([ForeignTerm(:age, :no_such_w)]), dnet)
+            nothing
+        catch e
+            e
+        end
+        @test bad_e isa ArgumentError
+        @test occursin("edge attribute :no_such_w", bad_e.msg)
+
+        # ... and when its direction requirement is not met
+        unet = set_test_attrs!(fixture_undirected())
+        set_edge_attribute!(unet, :w, 1, 2, 1.0)
+        bad_d = try
+            ERGMModel(ERGMFormula([ForeignTerm(:age, :w)]), unet)
+            nothing
+        catch e
+            e
+        end
+        @test bad_d isa ArgumentError
+        @test occursin("directed", bad_d.msg)
     end
 
     @testset "Fail loudly: mcmc_diagnostics on an MPLE fit" begin
@@ -1148,7 +1235,7 @@ end
         @test occursin("pseudolikelihood", dep_out)
         @test occursin("suspect", dep_out)
 
-        # The coefficient table renders through the shared Network.jl
+        # The coefficient table renders through the shared Networks.jl
         # presentation layer (R-style columns and significance codes)
         @test occursin("Pr(>|z|)", dep_out)
         @test occursin("Signif. codes:", dep_out)
@@ -1196,6 +1283,72 @@ end
         θ0 = [8.0]
         newton_fit(pois, θ0)
         @test θ0 == [8.0]
+    end
+
+    # ------------------------------------------------------------------
+    # The shared logistic derivatives (review finding 15)
+    #
+    # ERGMMulti's MPLE, TERGM's CMPLE and ERGMRank's swap MPLE are all THIS
+    # likelihood, and all three used to carry their own copy of the loop with a
+    # per-row `x * x'` outer product inside it. One builder, one workspace, one
+    # allocation bound — and the bound is what stops the outer product coming
+    # back.
+    # ------------------------------------------------------------------
+    @testset "logistic_derivatives" begin
+        rng = MersenneTwister(11)
+        n, p = 400, 3
+        X = randn(rng, n, p)
+        βtrue = [0.7, -0.4, 0.2]
+        y = [rand(rng) < 1 / (1 + exp(-dot(βtrue, X[r, :]))) for r in 1:n]
+
+        d = logistic_derivatives(X, y)
+        β = [0.1, 0.0, -0.1]
+        ll, grad, hess = d(β)
+
+        # Against the textbook formulas, written out independently
+        η = X * β
+        pr = 1 ./ (1 .+ exp.(-η))
+        @test ll ≈ sum(y[r] ? log(pr[r]) : log1p(-pr[r]) for r in 1:n) atol = 1e-9
+        @test grad ≈ X' * (Float64.(y) .- pr) atol = 1e-9
+        @test hess ≈ -X' * ((pr .* (1 .- pr)) .* X) atol = 1e-9
+        @test issymmetric(round.(hess; digits=10))
+
+        # It IS a logistic regression: recovers the coefficients
+        fit = newton_fit(d, zeros(p))
+        @test fit.converged
+        @test fit.θ ≈ βtrue atol = 0.35
+        # ...and at the optimum the gradient vanishes
+        @test norm(d(fit.θ)[2]) < 1e-6
+
+        # The offset enters the linear predictor and nothing else
+        off = randn(rng, n)
+        doff = logistic_derivatives(X, y; offset=off)
+        ll_o, grad_o, _ = doff(β)
+        pr_o = 1 ./ (1 .+ exp.(-(η .+ off)))
+        @test ll_o ≈ sum(y[r] ? log(pr_o[r]) : log1p(-pr_o[r]) for r in 1:n) atol = 1e-9
+        @test grad_o ≈ X' * (Float64.(y) .- pr_o) atol = 1e-9
+        # a zero offset is no offset
+        @test logistic_derivatives(X, y; offset=zeros(n))(β)[1] ≈ ll atol = 1e-12
+
+        @test_throws ArgumentError logistic_derivatives(X, y[1:10])
+        @test_throws ArgumentError logistic_derivatives(X, y; offset=zeros(10))
+
+        # ALLOCATION REGRESSION. The old loop allocated a p×p outer product and
+        # two broadcast temporaries PER ROW PER EVALUATION — 470 KB on a 4200-row
+        # CMPLE design. An evaluation now allocates only the gradient and Hessian
+        # it returns: O(p²), independent of the number of rows.
+        function evaluation_allocs(rows)
+            Xr = randn(MersenneTwister(3), rows, p)
+            yr = rand(MersenneTwister(4), Bool, rows)
+            f = logistic_derivatives(Xr, yr)
+            f(β)                    # warm up — @allocated on a first call
+            return @allocated f(β)  # would measure compilation
+        end
+        small = evaluation_allocs(50)
+        big = evaluation_allocs(20_000)     # 400x the rows
+        @test small <= 512
+        @test big <= 512
+        @test big <= small + 64             # ...and no growth with the rows
     end
 
     @testset "Bridge log-likelihood matches exhaustive enumeration (n = 6)" begin
@@ -1354,7 +1507,8 @@ end
         # the masked-absent dyad must stay empty.
         for θ in ([-4.0], [0.0], [3.0])
             out = mh_sample(model, θ; n_samples=40, burnin=500, interval=20,
-                            rng=Random.Xoshiro(11), return_networks=true)
+                            rng=Random.Xoshiro(11), return_networks=true,
+                            missing=:condition_on_face)
             @test length(out.networks) == 40
             for s in out.networks
                 @test has_edge(s, 1, 2)
@@ -1364,7 +1518,8 @@ end
             end
         end
         sims = sample_networks(model, [3.0]; n_sim=20, burnin=500, interval=20,
-                               rng=Random.Xoshiro(5), n_chains=2)
+                               rng=Random.Xoshiro(5), n_chains=2,
+                               missing=:condition_on_face)
         @test all(has_edge(s, 1, 2) && !has_edge(s, 3, 4) for s in sims)
         # ... and the free dyads did move under θ = 3
         @test mean(Float64(ne(s)) for s in sims) > 30
@@ -1375,18 +1530,312 @@ end
         set_missing_dyad!(tiny, 2, 1)
         tiny_model = ERGMModel(ERGMFormula([Edges()]), tiny)
         @test_throws ArgumentError mh_sample(tiny_model, [0.0]; n_samples=1,
-                                             burnin=10, interval=1)
+                                             burnin=10, interval=1,
+                                             missing=:condition_on_face)
     end
 
-    @testset "Missing dyads: mcmle warns and conditions on face values" begin
+    @testset "Missing dyads: samplers reject masked networks by default" begin
+        n = 8
+        net = network(n)
+        add_edge!(net, 1, 2)
+        add_edge!(net, 2, 3)
+        set_missing_dyad!(net, 1, 2)   # masked, face value: edge present
+        set_missing_dyad!(net, 3, 4)   # masked, face value: edge absent
+        model = ERGMModel(ERGMFormula([Edges()]), net)
+
+        # Every sampler entry point refuses to reinterpret the masked ties
+        @test_throws ArgumentError mh_sample(model, [0.0]; n_samples=2,
+                                             burnin=10, interval=1)
+        @test_throws ArgumentError sample_networks(model, [0.0]; n_sim=2,
+                                                   burnin=10, interval=1)
+        err = try
+            mh_sample(model, [0.0]; n_samples=2, burnin=10, interval=1)
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("mh_sample", err.msg)        # names the routine
+        @test occursin("2 masked dyads", err.msg)   # shared Networks.jl message
+
+        # An unknown policy is rejected outright (not silently ignored)
+        @test_throws ArgumentError mh_sample(model, [0.0]; n_samples=2,
+                                             burnin=10, interval=1,
+                                             missing=:face)
+        @test_throws ArgumentError mh_sample(model, [0.0]; n_samples=2,
+                                             burnin=10, interval=1,
+                                             missing=:nonsense)
+
+        # Unmasked networks are unaffected by the guard
+        clean = network(n)
+        add_edge!(clean, 1, 2)
+        clean_model = ERGMModel(ERGMFormula([Edges()]), clean)
+        out = mh_sample(clean_model, [0.0]; n_samples=3, burnin=10, interval=1,
+                        rng=Random.Xoshiro(3))
+        @test size(out.stats) == (3, 1)
+    end
+
+    @testset "Missing dyads: MCMLE rejects by default, opts in explicitly" begin
         Random.seed!(77)
         flo = florentine_marriage()
-        set_missing_dyad!(flo, 1, 2)
+        # One masked dyad whose face value is a tie, one whose face value is
+        # a non-tie: both are unobserved, and MCMLE would score both as
+        # stored.
+        present = first((i, j) for i in 1:16, j in 1:16 if i < j && has_edge(flo, i, j))
+        absent = first((i, j) for i in 1:16, j in 1:16 if i < j && !has_edge(flo, i, j))
+        set_missing_dyad!(flo, present...)
+        set_missing_dyad!(flo, absent...)
+        @test n_missing_dyads(flo) == 2
         model = ERGMModel(ERGMFormula([Edges()]), flo)
+
+        # Default: rejected, with the shared missing-data error message
+        err = try
+            mcmle(model; n_samples=50, burnin=100, interval=5, max_iter=2,
+                  bridge_rungs=2, bridge_samples=50)
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("mcmle", err.msg)
+        @test occursin("2 masked dyads", err.msg)
+        @test occursin("unobserved", err.msg)
+
+        # ...and so is a bogus policy, or Network's generic :face spelling
+        # (the ERGM opt-in is the specific :condition_on_face)
+        @test_throws ArgumentError mcmle(model; missing=:face, n_samples=50,
+                                         burnin=100, interval=5, max_iter=2,
+                                         bridge_rungs=2, bridge_samples=50)
+
+        # Explicit opt-in: fits, warns honestly, and records the method
         fit = @test_logs (:warn, r"conditions on them at their face value") match_mode=:any mcmle(
-            model; n_samples=200, burnin=1000, interval=20, max_iter=5,
-            bridge_rungs=2, bridge_samples=100)
+            model; missing=:condition_on_face, n_samples=200, burnin=1000,
+            interval=20, max_iter=5, bridge_rungs=2, bridge_samples=100)
         @test length(fit.coefficients) == 1
-        @test nobs(fit) == 120 - 1
+        @test fit.missing_method === :condition_on_face
+        @test nobs(fit) == 120 - 2
+        # The treatment is visible in the printed output
+        s = sprint(show, fit)
+        @test occursin("Missing dyads: 2 masked", s)
+        @test occursin("conditioned on face values", s)
+
+        # An unmasked fit records :none and prints nothing about missingness
+        clean_fit = mcmle(ERGMModel(ERGMFormula([Edges()]), florentine_marriage());
+                          n_samples=200, burnin=1000, interval=20, max_iter=5,
+                          bridge_rungs=2, bridge_samples=100)
+        @test clean_fit.missing_method === :none
+        @test !occursin("Missing dyads", sprint(show, clean_fit))
+    end
+
+    @testset "Missing dyads: MPLE declares support, records available-case" begin
+        # MPLE's available-case pseudo-likelihood IS a principled treatment,
+        # so it declares the ecosystem trait and takes no `missing` keyword.
+        @test supports_missing(mple)
+        @test !supports_missing(mcmle)
+        @test !supports_missing(simulate_ergm)
+        @test !supports_missing(gof)
+
+        flo = florentine_marriage()
+        present = first((i, j) for i in 1:16, j in 1:16 if i < j && has_edge(flo, i, j))
+        absent = first((i, j) for i in 1:16, j in 1:16 if i < j && !has_edge(flo, i, j))
+        set_missing_dyad!(flo, present...)
+        set_missing_dyad!(flo, absent...)
+
+        fit = fit_ergm(flo, [Edges()])   # method=:mple
+        @test fit.method === :mple
+        @test fit.missing_method === :available_case
+        @test nobs(fit) == 120 - 2
+        s = sprint(show, fit)
+        @test occursin("Missing dyads: 2 masked", s)
+        @test occursin("available-case", s)
+
+        # Unmasked: :none
+        clean = fit_ergm(florentine_marriage(), [Edges()])
+        @test clean.missing_method === :none
+        @test !occursin("Missing dyads", sprint(show, clean))
+    end
+
+    @testset "Missing dyads: simulation and GOF cannot reinterpret masked ties" begin
+        Random.seed!(99)
+        flo = florentine_marriage()
+        present = first((i, j) for i in 1:16, j in 1:16 if i < j && has_edge(flo, i, j))
+        absent = first((i, j) for i in 1:16, j in 1:16 if i < j && !has_edge(flo, i, j))
+        set_missing_dyad!(flo, present...)
+        set_missing_dyad!(flo, absent...)
+
+        # An MPLE fit is legitimate on a masked network, but SIMULATING from
+        # it is a separate act that would freeze the unobserved ties at their
+        # face value — so it must be asked for.
+        fit = fit_ergm(flo, [Edges()])
+        @test_throws ArgumentError simulate_ergm(fit; n_sim=2, burnin=100,
+                                                 interval=10)
+        @test_throws ArgumentError gof(fit; n_sim=2, stats=[:degree],
+                                       burnin=100, interval=10)
+
+        sims = @test_logs (:warn, r"conditions on them at their face value") match_mode=:any simulate_ergm(
+            fit; n_sim=5, burnin=200, interval=10, rng=Random.Xoshiro(4),
+            n_chains=2, missing=:condition_on_face)
+        @test length(sims) == 5
+        # The face values are frozen in every simulated network
+        @test all(has_edge(s, present...) for s in sims)
+        @test all(!has_edge(s, absent...) for s in sims)
+
+        g = @test_logs (:warn, r"conditions on them at their face value") match_mode=:any gof(
+            fit; n_sim=5, stats=[:degree], burnin=200, interval=10,
+            rng=Random.Xoshiro(6), n_chains=2, missing=:condition_on_face)
+        @test length(g.statistics) == 1
+
+        # Unmasked fits keep working with the default policy
+        clean_fit = fit_ergm(florentine_marriage(), [Edges()])
+        @test length(simulate_ergm(clean_fit; n_sim=2, burnin=100, interval=10,
+                                   rng=Random.Xoshiro(7))) == 2
+    end
+
+    @testset "Result metadata protocol" begin
+        flo = florentine_marriage()
+
+        # THE assertion this protocol exists for: ONE estimator (MPLE), two
+        # formulas — exact ML on the dyad-independent one, an approximation on
+        # the dyad-dependent one. `is_exact` is a property of the FIT.
+        indep = fit_ergm(flo, [Edges(), NodeCov(:wealth)])
+        dep = fit_ergm(flo, [Edges(), GWESP(0.5)])
+
+        md_indep = fit_metadata(indep)
+        @test md_indep.estimand == :ergm
+        @test md_indep.objective == :pseudolikelihood
+        @test md_indep.is_exact          # MPLE of a dyad-independent formula IS the MLE
+        @test md_indep.se_method == :hessian
+        @test md_indep.missing_method == :none
+        @test md_indep.tie_method == :not_applicable
+        @test isempty(md_indep.approximations)
+
+        md_dep = fit_metadata(dep)
+        @test md_dep.objective == :pseudolikelihood     # same estimator
+        @test !md_dep.is_exact                          # different formula
+        @test md_dep.se_method == :hessian
+        @test any(occursin("anticonservative", a) for a in md_dep.approximations)
+
+        # The prose caveat in `show` and the protocol are driven by the same
+        # predicate, so they agree on every fit.
+        for (fit, exact) in ((indep, true), (dep, false))
+            printed = sprint(show, fit)
+            @test occursin("pseudolikelihood", printed) == !exact
+            @test is_exact(fit) == exact
+        end
+
+        # Accessors are callable directly, not only through the collector
+        @test estimand(indep) == :ergm
+        @test objective(indep) == :pseudolikelihood
+        @test missing_method(indep) == :none
+        @test approximations(indep) == String[]
+
+        # MCMLE: a Monte-Carlo approximation to the likelihood, never exact,
+        # with inverse-Fisher standard errors from the MCMC sample
+        mc = mcmle(ERGMModel(ERGMFormula([Edges(), GWESP(0.5)]), flo);
+                   n_samples=200, burnin=200, interval=5, max_iter=3,
+                   rng=Random.Xoshiro(11))
+        md_mc = fit_metadata(mc)
+        @test md_mc.objective == :mc_likelihood
+        @test !md_mc.is_exact
+        @test md_mc.se_method == :fisher
+        @test any(occursin("Monte-Carlo error", a) for a in md_mc.approximations)
+
+        # Bootstrap standard errors are reported as such
+        boot = fit_ergm(flo, [Edges(), GWESP(0.5)]; se=:bootstrap, n_boot=5,
+                        rng=Random.Xoshiro(12))
+        @test se_method(boot) == :bootstrap
+
+        # Masked dyads: MPLE drops them (available case), and the protocol says so
+        masked = florentine_marriage()
+        set_missing_dyad!(masked, 1, 4)
+        mfit = fit_ergm(masked, [Edges()])
+        @test missing_method(mfit) == :available_case
+        @test fit_metadata(mfit).missing_method == :available_case
+    end
+
+    # ------------------------------------------------------------------
+    # Golden fixture: a REAL statnet `ergm` fit, with provenance (issue #8).
+    #
+    # The "Golden master vs R ergm" testset above carries R's numbers as bare
+    # literals in comments. They are right, but they cannot be regenerated,
+    # nobody can tell which ergm produced them, and the atols beside them were
+    # chosen by hand. This testset loads the same comparison from a provenanced
+    # TOML fixture (test/fixtures/flomarriage_ergm.toml), generated by
+    # test/fixtures/r/flomarriage_ergm.R against a stated ergm version and seed,
+    # with every tolerance justified in the fixture itself.
+    #
+    # It deliberately covers BOTH kinds of ERGM fit, because they are different
+    # kinds of number and a single tolerance for both would be dishonest:
+    #   - dyad-independent: MPLE IS the exact MLE. Compared at 1e-6.
+    #   - dyad-dependent:   MCMLE. Compared against R's OWN measured seed-to-seed
+    #                       spread, which the fixture records.
+    # ------------------------------------------------------------------
+    @testset "Golden fixture: statnet ergm on flomarriage (provenanced)" begin
+        g = load_golden(joinpath(@__DIR__, "fixtures", "flomarriage_ergm.toml"))
+        @test g.provenance["ergm_version"] == "4.12.0"
+        flo = florentine_marriage()
+
+        # --- deterministic: summary statistics ---------------------------
+        # A function of the observed graph alone. Any disagreement is a bug in
+        # a term formula; there is no Monte Carlo to hide behind.
+        @test g.values["summary_statistic_names"] ==
+              ["edges", "nodecov.wealth", "gwesp.fixed.0.5"]
+        stats = [compute(Edges(), flo), compute(NodeCov(:wealth), flo),
+                 compute(GWESP(0.5), flo)]
+        @test check_golden(g, "summary_statistics", stats) ||
+              error(golden_report(g, "summary_statistics", stats))
+
+        # --- (a) dyad-independent: MPLE == exact ML ----------------------
+        # edges + nodecov("wealth") factorizes over dyads, so both packages are
+        # solving the SAME convex logistic regression. Agreement is asserted at
+        # 1e-6 — optimizer precision, not "close enough". Observed: 6.6e-12 on
+        # the coefficients, 4.8e-8 on the standard errors.
+        @test g.values["di_terms"] == ["edges", "nodecov.wealth"]
+        di = fit_ergm(flo, [Edges(), NodeCov(:wealth)]; method=:mple)
+        @test check_golden(g, "di_coefficients", di.coefficients) ||
+              error(golden_report(g, "di_coefficients", di.coefficients))
+        @test check_golden(g, "di_std_errors", di.std_errors) ||
+              error(golden_report(g, "di_std_errors", di.std_errors))
+        # The exact log-likelihood and AIC follow, and are exact for the same
+        # reason (no bridge sampler is involved in a dyad-independent fit).
+        @test di.loglik ≈ g.values["di_loglik"] atol = 1e-6
+        @test di.aic ≈ g.values["di_aic"] atol = 1e-6
+
+        # --- (b) dyad-dependent: MCMLE -----------------------------------
+        # edges + gwesp(0.5, fixed=TRUE). Both sides are Monte Carlo, so we
+        # compare the MEAN of five ERGM.jl fits at declared seeds against the
+        # frozen R fit, at a tolerance the fixture justifies from R's own
+        # seed-to-seed spread (`mcmle_seed_sd`).
+        @test g.values["dd_terms"] == ["edges", "gwesp.fixed.0.5"]
+        dd_fits = [fit_ergm(flo, [Edges(), GWESP(0.5)]; method=:mcmle,
+                            n_samples=4096, rng=Random.Xoshiro(s))
+                   for s in (101, 202, 303, 404, 505)]
+        @test all(f.converged for f in dd_fits)
+        dd_coef = mean(f.coefficients for f in dd_fits)
+        dd_se = mean(f.std_errors for f in dd_fits)
+        @test check_golden(g, "dd_coefficients", dd_coef) ||
+              error(golden_report(g, "dd_coefficients", dd_coef))
+        @test check_golden(g, "dd_std_errors", dd_se) ||
+              error(golden_report(g, "dd_std_errors", dd_se))
+
+        # The agreement above is closer than R's agreement with ITSELF: the
+        # gap to R is smaller than R's own seed-to-seed sd on both coefficients.
+        r_sd = Float64.(g.values["mcmle_seed_sd"])
+        gap = abs.(dd_coef .- Float64.(g.values["dd_coefficients"]))
+        @test all(gap .< 3 .* r_sd)
+
+        # DOCUMENTED BEHAVIOURAL DIFFERENCE (not a numerical one). ERGM.jl's
+        # MCMLE checks convergence BEFORE applying its first Newton update, and
+        # on this model the check passes at the MPLE (max t-ratio 0.006), so the
+        # returned point estimate IS the MPLE and has zero seed-to-seed
+        # variance. statnet always takes at least one MCMLE step. The estimate
+        # is defensible — it satisfies E_θ[g] = g_obs to within Monte-Carlo
+        # error, which is the MLE condition — and it lands inside R's own noise,
+        # but the two numbers are not produced the same way and a reader
+        # comparing them deserves to know. Pinned so the day it changes is
+        # visible rather than silent.
+        mple_dd = fit_ergm(flo, [Edges(), GWESP(0.5)]; method=:mple)
+        @test dd_fits[1].coefficients ≈ mple_dd.coefficients atol = 1e-12
+        @test std(f.coefficients[2] for f in dd_fits) < 1e-12
+        # ...while the standard errors DO come from the MCMC sample, and vary.
+        @test std(f.std_errors[2] for f in dd_fits) > 1e-6
     end
 end

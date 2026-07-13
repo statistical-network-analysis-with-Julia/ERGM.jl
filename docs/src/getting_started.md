@@ -8,7 +8,7 @@ Install ERGM.jl from GitHub:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl")
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Networks.jl")
 Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl")
 ```
 
@@ -23,10 +23,10 @@ The typical ERGM.jl workflow consists of four steps:
 
 ## Step 1: Create a Network
 
-Networks are represented using the `Network` type from Network.jl:
+Networks are represented using the `Network` type from Networks.jl:
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 
 # Create an undirected network with 10 nodes
 net = network(10; directed=false)
@@ -216,7 +216,7 @@ Coefficients are **log-odds ratios** for the conditional probability of an edge:
 ## Complete Example
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 using Random
 using Statistics
 

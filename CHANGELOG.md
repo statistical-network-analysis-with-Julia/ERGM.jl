@@ -36,7 +36,7 @@ rewritten for O(deg) scaling.
   per level with the first (sorted) level as the reference, exactly like R's
   `nodefactor`. *Migration:* pass `base=0` to keep all levels (as separate
   per-level statistics); use `levels=`/`level=` for explicit control.
-- **`gof` returns a `Network.GOFResult`** instead of a NamedTuple
+- **`gof` returns a `Networks.GOFResult`** instead of a NamedTuple
   `(results::Dict, n_sim)`. P-values are two-sided Monte-Carlo
   `(1+k)/(N+1)` (never exactly zero), and on directed fits the `:degree`
   panel splits into `:idegree`/`:odegree`. *Migration:* access panels via
@@ -60,8 +60,94 @@ rewritten for O(deg) scaling.
   unused `SNA` dependency was dropped. *Migration:* upgrade Julia.
 - **Package UUID regenerated** (placeholder replaced). *Migration:*
   re-resolve environments that recorded the old UUID.
+- **MCMLE, simulation and GOF now reject networks with masked (missing)
+  dyads by default.** Holding an unobserved dyad fixed at its stored face
+  value — never toggling it, and scoring it as recorded — targets a
+  different estimand from both statnet's missing-data MLE and MPLE's
+  available-case pseudo-likelihood, so it is no longer the silent default
+  (it used to be, behind a warning). `mcmle`, `mh_sample`,
+  `sample_networks`, `simulate_ergm`, and `gof` take
+  `missing::Symbol=:error` and throw `Networks.require_observed`'s shared
+  `ArgumentError` on a masked network. *Migration:* pass
+  `missing=:condition_on_face` to opt back in to the 0.1 behaviour
+  explicitly (still warned), or use `mple`, which handles the masked dyads
+  properly.
 
 ### Added
+
+- **Provenanced golden fixture against a real statnet `ergm` fit** (issue #8).
+  `test/fixtures/flomarriage_ergm.toml` freezes an ergm 4.12.0 / R 4.6.1 fit of
+  the Florentine marriage network, regenerable with
+  `Rscript test/fixtures/r/flomarriage_ergm.R > test/fixtures/flomarriage_ergm.toml`
+  and loaded through Networks.jl's `load_golden`, which refuses a fixture with no
+  provenance. It replaces (does not remove) the R coefficients that lived as bare
+  literals in test comments: those cannot be regenerated, carry no record of which
+  ergm produced them, and had hand-chosen atols beside them.
+
+  The fixture covers **both kinds of ERGM fit, at different tolerances, because
+  they are different kinds of number**:
+
+  - **Dyad-independent** (`edges + nodecov("wealth")`): the likelihood factorizes,
+    so MPLE *is* the exact MLE and both packages solve the same convex logistic
+    regression. Asserted at **1e-6**. ERGM.jl agrees to **6.6e-12** on the
+    coefficients and **4.8e-8** on the standard errors.
+  - **Dyad-dependent** (`edges + gwesp(0.5, fixed=TRUE)`): MCMLE on both sides.
+    The R script refits under five further seeds and freezes R's own seed-to-seed
+    sd (0.0057 / 0.0059); the tolerance (0.03) is ~5x that and ~10% of a fitted
+    standard error. ERGM.jl's five-seed mean lands **0.0016 / 0.00034** from R —
+    closer than R gets to itself.
+
+  Documented behavioural difference, now pinned by the testset: ERGM.jl's MCMLE
+  runs its convergence check *before* the first Newton update, and on this model
+  it passes at the MPLE (max t-ratio 0.006), so the returned point estimate **is**
+  the MPLE and has zero seed-to-seed variance. statnet always takes at least one
+  MCMLE step. The estimate satisfies E_θ[g] = g_obs to within Monte-Carlo error —
+  the MLE condition — and lands inside R's noise, so it is defensible; but it is
+  not produced the same way, and the test says so.
+
+- **The MPLE parametric bootstrap now runs on the shared
+  `Networks.bootstrap_cov`** rather than its own loop. `mple(model;
+  se=:bootstrap)` is unchanged in API and semantics — it is the reference
+  implementation the count, rank and multilayer MPLEs were rolled out from, and
+  factoring its loop into Networks.jl is what let them share it instead of
+  copy-pasting it four times (issue #9).
+
+- **The term traits are a public, documented protocol** (`src/terms/traits.jl`;
+  ERGMUserterms.jl#1). A term now *declares* what it needs, and formula
+  validation acts on the declarations rather than on ERGM's own term types —
+  so a term defined in any package participates in exactly the same checks as
+  a built-in one:
+  - `required_vertex_attributes(term)` / `required_edge_attributes(term)`
+    (tuples of `Symbol`, default `()`) — validated against the network at
+    `ERGMModel` construction; an absent attribute throws the standard
+    `ArgumentError` instead of silently producing an all-zero design column.
+    Edge-attribute validation is new.
+  - `requires_directed(term)` / `requires_undirected(term)` (default `false`) —
+    rejected on an incompatible network, as before.
+  - `is_dyad_dependent(term)` — already public, now documented alongside the
+    rest of the protocol.
+  - `Networks.supports_missing(term)` (default `false`) — a term declares
+    `true` iff its statistic honours the missing-dyad mask, i.e. is invariant
+    to the face value of a masked dyad. Every built-in term is `false`: they
+    count masked dyads at face value, and ERGM's principled treatment lives in
+    the estimator (`supports_missing(mple) == true`).
+
+  The private predecessors (`_vertex_attribute`, `_requires_directed`,
+  `_requires_undirected`) remain: the two direction traits are now `const`
+  aliases of the public generics, so downstream packages that had reached into
+  them — TERGM.jl ships `ERGM._requires_directed(::Delrecip) = true` — keep
+  working unchanged and keep driving validation. `_vertex_attribute` is a shim
+  returning the first required vertex attribute (or `nothing`).
+
+- **Ecosystem missing-data contract honoured** (Networks.jl `supports_missing`
+  / `require_observed`). `supports_missing(mple) == true`: MPLE's exclusion
+  of masked dyads from the design matrix is the standard available-case
+  pseudo-likelihood, a principled treatment. Nothing else in ERGM.jl declares
+  support; `ERGMResult` gains a `missing_method::Symbol` field recording what
+  actually happened (`:none`, `:available_case`, or `:condition_on_face`),
+  and `show` reports the treatment whenever the network carried a mask.
+  Full missing-data MCMLE (conditional simulation of the unobserved dyads)
+  remains unimplemented — see issue #4.
 
 - Missing statnet terms: `Degree(d)`, `IDegree(d)`, `ODegree(d)` (accept
   vectors/ranges, e.g. `Degree(0:2)`, expanding to one term per degree),
@@ -76,7 +162,7 @@ rewritten for O(deg) scaling.
   se=:bootstrap, n_boot=...)`; `show` prints a statnet-style
   anticonservative-SE caveat for pseudo-likelihood fits of dyad-dependent
   models.
-- Missing-data support: dyads masked with `Network.set_missing_dyad!` are
+- Missing-data support: dyads masked with `Networks.set_missing_dyad!` are
   excluded from the MPLE design matrix (and `nobs`); MCMC never toggles them
   and `mcmle` warns that it conditions on their face values.
 - Public building blocks for downstream packages: `mh_sample(model, θ)`
@@ -92,12 +178,21 @@ rewritten for O(deg) scaling.
   (was a diagonal reconstruction); `ERGMResult` records `se_type`.
 - `mcmc_diagnostics` adds Geyer initial-sequence ESS (`ess_geyer`) and
   Geweke convergence diagnostics (`geweke_z`/`geweke_p`) per statistic.
-- `using ERGM` now re-exports the Network.jl public API (constructors,
+- `using ERGM` now re-exports the Networks.jl public API (constructors,
   attribute setters, `load_dataset`, ...), so one import suffices.
 - BenchmarkTools suite (`benchmark/`) with allocation regression tests.
 
 ### Changed
 
+- **`compute`, `name` and `compute_all` are now the shared Networks.jl
+  generics**, imported by name and extended with ERGM's term methods, rather
+  than ERGM's own functions. They are still exported, and `compute(term, net)`
+  is unchanged; what changes is identity: `ERGM.compute === REM.compute ===
+  Networks.compute`. Previously each model package owned a distinct function of
+  the same name, so `using ERGM, REM` left the unqualified verbs *undefined*
+  under Julia's conflicting-export rule (REM.jl#3). Downstream term packages
+  (ERGMCount, ERGMMulti, ERGMRank, ERGMEgo, ERGMUserterms, TERGM) keep working
+  unchanged: `import ERGM: name, compute` resolves to the shared generics.
 - MCMLE overhaul to statnet standards: Hummel step-length control on the
   Newton updates, Hotelling T² convergence test (replacing the unattainable
   raw-count tolerance that made every fit report `converged=false`),
@@ -118,7 +213,7 @@ rewritten for O(deg) scaling.
 - Attribute-based terms are materialized at model construction into typed
   twins that snapshot attributes into dense vectors (names and semantics
   preserved).
-- `show(::ERGMResult)` prints through the shared `Network.print_coeftable`
+- `show(::ERGMResult)` prints through the shared `Networks.print_coeftable`
   presentation layer (R-style coefficient table with significance codes).
 
 ### Fixed
@@ -140,6 +235,19 @@ rewritten for O(deg) scaling.
 
 ### Performance
 
+- **`logistic_derivatives(X, y; offset)` — the shared, allocation-free
+  logistic `(ll, grad, hess)` builder** (review finding 15), exported next to
+  `newton_fit`. `ERGMMulti`'s MPLE over the within-layer dyads, `TERGM`'s CMPLE
+  over the free dyads of the auxiliary networks, and `ERGMRank`'s swap MPLE over
+  the (ego, alter-pair) comparisons are all the *same* logistic likelihood, and
+  all three carried their own copy of the loop with a per-row `x * x'` outer
+  product inside it — a fresh `p×p` matrix on every design row of every Newton
+  evaluation. There is now one builder, with the workspaces allocated once and
+  the derivatives formed by gemv/gemm over the whole design (`η = Xβ`,
+  `∇ = X'r`, `−H = X'WX`). An evaluation allocates only the gradient and Hessian
+  it returns: 192-304 bytes, independent of the number of rows (was 649 KB on a
+  3120-row ERGMMulti design, 471 KB on a 4200-row TERGM one), and 4-8x faster.
+  Pinned by `@allocated` regression tests here and in all three packages.
 - Change statistics for `Triangle`, `GWESP`, `GWDSP`, and the ESP GOF use
   sorted neighbor-list intersection — O(deg) per toggle instead of O(n)
   vertex scans (directed Triangle `compute` was O(n³)) — lifting clustered

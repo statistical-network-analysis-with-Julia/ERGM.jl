@@ -235,6 +235,11 @@ Results from fitting an ERGM.
 - `se_type::Symbol`: How the standard errors were obtained (`:hessian` for
   inverse observed information, `:bootstrap` for parametric bootstrap,
   `:mcmc` for the inverse Fisher information estimated from MCMC samples)
+- `missing_method::Symbol`: How masked (unobserved) dyads were treated —
+  `:none` if the network had none, `:available_case` if they were dropped
+  from the pseudo-likelihood (MPLE), `:condition_on_face` if they were held
+  fixed at their stored face value throughout MCMC (MCMLE with
+  `missing=:condition_on_face`). See `src/missing.jl`.
 """
 struct ERGMResult{T}
     model::ERGMModel{T}
@@ -250,7 +255,16 @@ struct ERGMResult{T}
     converged::Bool
     mcmc_samples::Union{Nothing, Matrix{Float64}}
     se_type::Symbol
+    missing_method::Symbol
 end
+
+# Backward-compatible constructor from before `missing_method` existed
+ERGMResult(model, coefficients, std_errors, z_values, p_values, vcov,
+           loglik, aic, bic, method, converged, mcmc_samples, se_type::Symbol) =
+    ERGMResult(model, coefficients, std_errors, z_values, p_values, vcov,
+               loglik, aic, bic, method, converged, mcmc_samples, se_type,
+               n_missing_dyads(model.network) == 0 ? :none :
+                   (method === :mple ? :available_case : :condition_on_face))
 
 # Backward-compatible constructor from before `se_type` existed
 ERGMResult(model, coefficients, std_errors, z_values, p_values, vcov,
@@ -259,17 +273,46 @@ ERGMResult(model, coefficients, std_errors, z_values, p_values, vcov,
                loglik, aic, bic, method, converged, mcmc_samples,
                method === :mcmle ? :mcmc : :hessian)
 
+"""
+    _has_dyad_dependent(model::ERGMModel) -> Bool
+
+Whether the model's formula contains any dyad-dependent term (see
+[`is_dyad_dependent`](@ref); unknown term types count as dependent).
+
+This is THE predicate that decides whether a pseudo-likelihood fit is an
+approximation: for a dyad-independent formula the MPLE *is* the MLE and the
+inverse-Hessian standard errors are the exact ML ones. It is defined once and
+used by both `show(::ERGMResult)` (which prints the prose caveat) and
+`is_exact(::ERGMResult)` (which reports the same fact to a machine), so the two
+can never disagree.
+"""
+_has_dyad_dependent(model::ERGMModel) =
+    any(is_dyad_dependent(t) for t in model.formula.terms)
+
 function Base.show(io::IO, result::ERGMResult)
     println(io, "ERGM Results")
     println(io, "============")
     println(io, "Method: $(result.method)")
+
+    # Missing dyads are only mentioned when there are any: how they were
+    # treated is part of the estimand, so it must never be invisible.
+    n_masked = n_missing_dyads(result.model.network)
+    if n_masked > 0
+        treatment = result.missing_method === :available_case ?
+            "available-case (masked dyads dropped from the pseudo-likelihood)" :
+            result.missing_method === :condition_on_face ?
+            "conditioned on face values (masked dyads held fixed during MCMC)" :
+            string(result.missing_method)
+        println(io, "Missing dyads: $n_masked masked; $treatment")
+    end
+
     println(io, "Log-likelihood: $(round(result.loglik, digits=4))")
     println(io, "AIC: $(round(result.aic, digits=2)), BIC: $(round(result.bic, digits=2))")
     println(io, "Converged: $(result.converged)")
     println(io)
     println(io, "Coefficients:")
 
-    # Shared ecosystem presentation layer (Network.print_coeftable):
+    # Shared ecosystem presentation layer (Networks.print_coeftable):
     # Estimate / Std.Error / z value / Pr(>|z|) with significance codes
     print_coeftable(io, result.model.formula.terms.names,
                     result.coefficients, result.std_errors, result.p_values;
@@ -279,8 +322,7 @@ function Base.show(io::IO, result::ERGMResult)
     # models have suspect inverse-Hessian standard errors (statnet prints an
     # analogous warning). Dyad-independent formulas need no caveat — there
     # the pseudo-likelihood is the likelihood.
-    if result.method == :mple &&
-       any(is_dyad_dependent(t) for t in result.model.formula.terms)
+    if result.method == :mple && _has_dyad_dependent(result.model)
         println(io)
         if result.se_type == :bootstrap
             println(io, "Note: this model contains dyad-dependent terms and was fit by maximum")
@@ -297,6 +339,77 @@ function Base.show(io::IO, result::ERGMResult)
     end
 end
 
+# ============================================================================
+# The shared result-metadata protocol (Networks.jl `src/results.jl`)
+# ============================================================================
+#
+# `fit_metadata(fit)` collects these seven accessors, so what the fit actually
+# did is programmatically inspectable instead of being a sentence in `show`.
+# The prose caveat printed above and the values reported here are derived from
+# the SAME predicate (`_has_dyad_dependent`), so they cannot drift apart.
+
+estimand(::ERGMResult) = :ergm
+
+"""
+    objective(result::ERGMResult) -> Symbol
+
+`:pseudolikelihood` for an MPLE fit (dyadwise conditionals multiplied as if
+independent) and `:mc_likelihood` for MCMLE (a Monte-Carlo approximation to the
+likelihood). Part of the shared result-metadata protocol.
+"""
+objective(result::ERGMResult) =
+    result.method === :mple  ? :pseudolikelihood :
+    result.method === :mcmle ? :mc_likelihood    : :unspecified
+
+"""
+    is_exact(result::ERGMResult) -> Bool
+
+`true` only for an MPLE fit of a **dyad-independent** formula: there the
+dyadwise conditionals are the model's conditionals, so the pseudo-likelihood is
+the likelihood and the MPLE is the exact MLE. The very same estimator applied to
+a formula containing any dyad-dependent term (`Triangle`, `GWESP`, `Mutual`, ...)
+reports `false`. MCMLE is always `false` — it maximizes a Monte-Carlo
+approximation to the likelihood.
+"""
+is_exact(result::ERGMResult) =
+    result.method === :mple && !_has_dyad_dependent(result.model)
+
+"""
+    se_method(result::ERGMResult) -> Symbol
+
+`:hessian` (inverse observed information of the objective), `:bootstrap`
+(parametric bootstrap), or `:fisher` — the `se_type == :mcmc` case, where the
+covariance is the inverse Fisher information estimated from the MCMC sample.
+"""
+se_method(result::ERGMResult) =
+    result.se_type === :mcmc ? :fisher : result.se_type
+
+missing_method(result::ERGMResult) = result.missing_method
+
+function approximations(result::ERGMResult)
+    out = String[]
+    if result.method === :mple && _has_dyad_dependent(result.model)
+        push!(out, "maximum pseudo-likelihood of a dyad-dependent formula: the " *
+                   "dyad conditionals are multiplied as if independent, so the " *
+                   "point estimates are biased in finite samples")
+        result.se_type === :hessian &&
+            push!(out, "inverse-Hessian standard errors of the naive " *
+                       "pseudo-likelihood: expected anticonservative under " *
+                       "dyadic dependence")
+    end
+    if result.method === :mcmle
+        push!(out, "MCMLE: the likelihood is approximated by an MCMC sample, so " *
+                   "the estimates carry Monte-Carlo error")
+        push!(out, "the reported log-likelihood (and AIC/BIC) is a path-sampling " *
+                   "bridge estimate from a dyad-independent reference model")
+    end
+    result.missing_method === :condition_on_face &&
+        push!(out, "masked (unobserved) dyads were held fixed at their stored " *
+                   "face values throughout MCMC — a different estimand from " *
+                   "missing-data maximum likelihood")
+    return out
+end
+
 # StatsAPI interface: methods on the shared statistics generics, so results
 # interoperate with StatsBase/GLM-style tooling (`coef(fit)`, `aic(fit)`, ...)
 
@@ -305,7 +418,7 @@ end
 
 Number of observed free dyads in the model's network (ordered pairs for
 directed networks, unordered pairs otherwise), excluding dyads masked as
-missing via `Network.set_missing_dyad!` — their tie status is unobserved,
+missing via `Networks.set_missing_dyad!` — their tie status is unobserved,
 so they are not observations.
 """
 function _n_dyads(model::ERGMModel)

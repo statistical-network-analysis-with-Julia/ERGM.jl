@@ -16,7 +16,7 @@ Even a model that converges successfully may not capture important features of t
 ### Running GOF
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 using Random
 using Statistics
 
@@ -58,7 +58,7 @@ statnet's directed default — same types as `GWESP`).
 
 ### GOF Results
 
-`gof` returns a `Network.GOFResult` — the goodness-of-fit container
+`gof` returns a `Networks.GOFResult` — the goodness-of-fit container
 shared by every model package in the ecosystem. Its `statistics` field
 holds one `GOFStatistic` per panel:
 
@@ -71,7 +71,7 @@ holds one `GOFStatistic` per panel:
 | `p_values` | `Vector{Float64}` | Two-sided Monte-Carlo p-values per level |
 
 p-values use the shared `(1 + k)/(N + 1)` Monte-Carlo estimator
-(`Network.mc_pvalue`), so they are never exactly zero. `println(gof_result)`
+(`Networks.mc_pvalue`), so they are never exactly zero. `println(gof_result)`
 renders observed value, simulation envelope, and p-value per level.
 
 ### Interpreting GOF Results
@@ -262,7 +262,7 @@ result = ergm(net, terms;
 ## Complete Diagnostic Workflow
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 using Random
 
 Random.seed!(42)

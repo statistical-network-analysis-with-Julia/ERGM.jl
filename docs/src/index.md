@@ -56,7 +56,7 @@ ERGMs are widely used in:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl")
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Networks.jl")
 Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl")
 ```
 
@@ -70,7 +70,7 @@ Pkg.develop(path="/path/to/ERGM.jl")
 ## Quick Start
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 
 # Create a network
 net = network(30; directed=false)
@@ -162,3 +162,9 @@ Change statistics are central to both estimation (MPLE uses them as features) an
 4. Strauss, D., Ikeda, M. (1990). Pseudolikelihood estimation for social networks. *Journal of the American Statistical Association*, 85(409), 204-212.
 
 5. Frank, O., Strauss, D. (1986). Markov graphs. *Journal of the American Statistical Association*, 81(395), 832-842.
+
+## Module
+
+```@docs
+ERGM
+```

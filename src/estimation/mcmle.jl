@@ -9,7 +9,8 @@ providing more accurate estimates than MPLE for models with strong dependencies.
     mcmle(model::ERGMModel; n_samples::Int=1000, burnin=nothing,
           interval=nothing, max_iter::Int=20, conv_threshold::Float64=0.1,
           hotelling_alpha::Float64=0.05, gamma0::Float64=0.1,
-          max_step_norm::Float64=5.0, verbose::Bool=false) -> ERGMResult
+          max_step_norm::Float64=5.0, missing::Symbol=:error,
+          verbose::Bool=false) -> ERGMResult
 
 Fit an ERGM using Monte Carlo Maximum Likelihood Estimation.
 
@@ -41,6 +42,8 @@ must be non-significant at level `hotelling_alpha`.
   convergence test
 - `gamma0::Float64=0.1`: Initial Hummel step length
 - `max_step_norm::Float64=5.0`: Cap on the Euclidean norm of each Newton step
+- `missing::Symbol=:error`: Treatment of dyads masked as missing
+  (`Networks.set_missing_dyad!`) — see the missing-data note below
 - `rng::AbstractRNG=Random.default_rng()`: Source of all random draws; runs
   with the same rng state are exactly reproducible
 - `bridge_rungs::Int=16`: Number of path-sampling segments used for the
@@ -51,12 +54,25 @@ must be non-significant at level `hotelling_alpha`.
 The `tol` keyword accepted by earlier versions is deprecated and ignored;
 convergence is now assessed with the statistical tests described above.
 
-If the network has dyads masked as missing (`Network.set_missing_dyad!`),
-MCMLE **conditions on them at their face value**: the MH sampler never
-toggles them and the observed statistics include them as stored. This is an
-honest approximation, not full missing-data ML (which is future work); a
-one-time warning is emitted. MPLE, in contrast, excludes masked dyads from
-the pseudo-likelihood entirely.
+# Missing data
+
+MCMLE does **not** implement missing-data maximum likelihood. It cannot
+simulate the unobserved dyads conditionally (statnet-style missing-data
+MCMC); all it can do is hold each masked dyad fixed at its stored face
+value — never toggling it, and scoring it as recorded in the observed
+sufficient statistics. That targets a *different* estimand than the
+missing-data MLE, and a different one than MPLE's available-case
+pseudo-likelihood, so it is not the silent default:
+
+- `missing=:error` (default) — a network with masked dyads is **rejected**
+  with the shared `Networks.require_observed` error.
+- `missing=:condition_on_face` — explicit opt-in to the face-value
+  conditioning described above, with a warning. The fit records
+  `missing_method = :condition_on_face`.
+
+Use `mple` (which declares `Networks.supports_missing(mple) == true`) if you
+want a principled treatment of the masked dyads today; full missing-data
+MCMLE is tracked as ERGM.jl issue #4.
 
 The reported log-likelihood (and hence AIC/BIC) is estimated by path
 sampling along a `bridge_rungs`-segment ladder from a dyad-independent
@@ -84,6 +100,7 @@ function mcmle(model::ERGMModel{T};
                bridge_rungs::Int=16,
                bridge_samples::Union{Nothing,Int}=nothing,
                tol::Union{Nothing,Real}=nothing,
+               missing::Symbol=:error,
                verbose::Bool=false) where T
     if !isnothing(tol)
         @warn "The `tol` keyword to `mcmle` is deprecated and ignored: convergence " *
@@ -91,15 +108,12 @@ function mcmle(model::ERGMModel{T};
               "Hotelling T² test (`hotelling_alpha`)." maxlog=1
     end
 
-    n_masked = n_missing_dyads(model.network)
-    if n_masked > 0
-        @warn "The network has $n_masked missing (unobserved) dyads. MCMLE " *
-              "conditions on them at their face value: masked dyads are held " *
-              "fixed (edge present/absent as stored) during MCMC and enter " *
-              "the observed sufficient statistics at that face value. Full " *
-              "maximum likelihood under missing data (statnet-style missing-" *
-              "data MCMC) is not yet implemented." maxlog=1
-    end
+    # Missing-data guard: masked dyads are rejected unless the caller has
+    # explicitly asked for face-value conditioning (a different estimand).
+    missing_policy = missing
+    missing_method = _guard_missing(model.network, missing_policy; context="mcmle")
+    missing_method === :condition_on_face &&
+        _warn_condition_on_face(model.network, "MCMLE")
 
     # Dyad-scaled MCMC defaults: larger networks need proportionally more
     # toggles to mix
@@ -136,7 +150,8 @@ function mcmle(model::ERGMModel{T};
         end
 
         # Sample networks from current model
-        samples = _mcmc_sample(model, θ, n_samples, burnin, interval; rng=rng)
+        samples = _mcmc_sample(model, θ, n_samples, burnin, interval; rng=rng,
+                               missing=missing_policy)
 
         # Compute mean and covariance of sampled statistics
         mean_stats = vec(mean(samples, dims=1))
@@ -201,7 +216,8 @@ function mcmle(model::ERGMModel{T};
     end
 
     # Compute final statistics
-    final_samples = _mcmc_sample(model, θ, n_samples, burnin, interval; rng=rng)
+    final_samples = _mcmc_sample(model, θ, n_samples, burnin, interval; rng=rng,
+                                 missing=missing_policy)
     cov_stats = cov(final_samples)
 
     # Covariance of θ̂ from the inverse Fisher information
@@ -223,7 +239,8 @@ function mcmle(model::ERGMModel{T};
     loglik = _bridge_loglik(model, θ, obs_stats;
                             nrungs=bridge_rungs,
                             n_samples=something(bridge_samples, n_samples),
-                            burnin=burnin, interval=interval, rng=rng)
+                            burnin=burnin, interval=interval, rng=rng,
+                            missing=missing_policy)
 
     aic = -2 * loglik + 2 * p
     bic = -2 * loglik + p * log(n_dyads)
@@ -241,7 +258,8 @@ function mcmle(model::ERGMModel{T};
         :mcmle,
         converged,
         final_samples,
-        :mcmc
+        :mcmc,
+        missing_method
     )
 end
 
@@ -299,16 +317,18 @@ end
 
 """
     _mcmc_sample(model, θ, n_samples, burnin, interval;
-                 rng=Random.default_rng()) -> Matrix{Float64}
+                 rng=Random.default_rng(), missing=:error) -> Matrix{Float64}
 
 Generate MCMC samples of network statistics, starting from the observed
-network. Thin compatibility wrapper over the public [`mh_sample`](@ref).
+network. Thin compatibility wrapper over the public [`mh_sample`](@ref);
+`missing` is the caller's already-validated missing-dyad policy.
 """
 function _mcmc_sample(model::ERGMModel, θ::Vector{Float64},
                       n_samples::Int, burnin::Int, interval::Int;
-                      rng::AbstractRNG=Random.default_rng())
+                      rng::AbstractRNG=Random.default_rng(),
+                      missing::Symbol=:error)
     return mh_sample(model, θ; n_samples=n_samples, burnin=burnin,
-                     interval=interval, rng=rng).stats
+                     interval=interval, rng=rng, missing=missing).stats
 end
 
 """
@@ -356,7 +376,7 @@ end
 
 """
     _bridge_loglik(model, θ, obs_stats; nrungs=16, n_samples=500,
-                   burnin, interval, rng) -> Float64
+                   burnin, interval, rng, missing=:error) -> Float64
 
 Path-sampling (bridge) estimate of the log-likelihood
 `θ'g(y_obs) − log Z(θ)` — the estimator behind MCMLE's AIC/BIC.
@@ -380,12 +400,17 @@ reference.
 
 For fully dyad-independent models `θ₀ = θ` and the exact log-likelihood is
 returned with no Monte Carlo error.
+
+`missing` is the caller's already-validated missing-dyad policy: with
+`:condition_on_face` every rung (and the exact reference normalizer) is the
+*conditional* one given the masked dyads' face values.
 """
 function _bridge_loglik(model::ERGMModel, θ::Vector{Float64},
                         obs_stats::Vector{Float64};
                         nrungs::Int=16, n_samples::Int=500,
                         burnin::Int=10000, interval::Int=100,
-                        rng::AbstractRNG=Random.default_rng())
+                        rng::AbstractRNG=Random.default_rng(),
+                        missing::Symbol=:error)
     nrungs >= 1 || throw(ArgumentError("nrungs must be at least 1"))
     terms = model.formula.terms
 
@@ -407,12 +432,14 @@ function _bridge_loglik(model::ERGMModel, θ::Vector{Float64},
     us = range(0.0, 1.0; length=nrungs + 1)
     seeds = rand(rng, UInt64, length(us))
     contrib = Vector{Float64}(undef, length(us))
+    missing_policy = missing
     @sync for k in eachindex(us)
         Threads.@spawn begin
             θu = θ0 .+ us[k] .* Δ
             rung_rng = Random.Xoshiro(seeds[k])
             stats = mh_sample(model, θu; n_samples=n_samples, burnin=burnin,
-                              interval=interval, rng=rung_rng).stats
+                              interval=interval, rng=rung_rng,
+                              missing=missing_policy).stats
             contrib[k] = dot(Δ, vec(mean(stats, dims=1)))
         end
     end

@@ -30,7 +30,7 @@ ERGM.jl organizes terms into three categories:
 These capture patterns in the network topology without reference to node attributes. The examples below assume the packages are loaded and a small example network exists:
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 
 net = network(3; directed=true)
 add_edge!(net, 1, 2)
@@ -381,7 +381,7 @@ EdgeCov(net, :distance)
 ### Building a Model
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 
 # Set attributes
 set_vertex_attribute!(net, :gender, Dict(1=>"M", 2=>"F", 3=>"M"))

@@ -23,7 +23,7 @@ MPLE treats each potential edge as an independent observation and fits a logisti
 $$\text{logit}\left(P(Y_{ij} = 1 \mid Y_{-ij})\right) = \theta^\top \delta(y)_{ij}$$
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 using Random
 
 Random.seed!(42)
@@ -167,7 +167,7 @@ The sampler uses burn-in to reach stationarity and thinning to reduce autocorrel
 
 ## Missing (Unobserved) Dyads
 
-Network.jl can mark dyads whose tie status is **unobserved** (statnet-style
+Networks.jl can mark dyads whose tie status is **unobserved** (statnet-style
 NA ties) with `set_missing_dyad!(net, i, j)` — distinct from "no tie". The
 estimation routines treat the mask as follows:
 

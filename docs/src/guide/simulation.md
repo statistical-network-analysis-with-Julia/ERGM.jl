@@ -16,7 +16,7 @@ Network simulation serves several purposes:
 The simplest approach is to simulate from an `ERGMResult`:
 
 ```julia
-using Network, ERGM
+using Networks, ERGM
 using Random
 
 Random.seed!(42)

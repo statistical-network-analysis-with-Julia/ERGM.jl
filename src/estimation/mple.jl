@@ -37,7 +37,7 @@ Build compressed MPLE data: unique change-statistic rows with the number of
 dyads (`n_tot`) and the number of observed edges (`n_one`) sharing each row.
 Compressing identical rows keeps memory O(unique rows) instead of O(n²).
 
-Dyads masked as missing (see `Network.set_missing_dyad!`) are excluded: their
+Dyads masked as missing (see `Networks.set_missing_dyad!`) are excluded: their
 tie status is unobserved, so they contribute no response row. Their face
 values still enter the *predictors* of the remaining dyads, since change
 statistics are computed conditional on the rest of the observed network.
@@ -176,11 +176,21 @@ Fit an ERGM using Maximum Pseudo-Likelihood Estimation.
 Note: the reported log-likelihood is the maximized *pseudo*-log-likelihood;
 AIC/BIC derived from it are only heuristics for dependence models.
 
-Dyads masked as missing (`Network.set_missing_dyad!`) are excluded from the
+Dyads masked as missing (`Networks.set_missing_dyad!`) are excluded from the
 pseudo-likelihood: an unobserved tie status is not a response, so those
 dyads contribute no logistic-regression row and `nobs` decreases
 accordingly. Their face values still condition the change statistics of the
-observed dyads.
+observed dyads. This is the standard *available-case* pseudo-likelihood — a
+principled treatment of missing data — so `mple` declares
+`Networks.supports_missing(mple) == true` and needs no `missing` keyword;
+the fit records `missing_method = :available_case` (`:none` when nothing is
+masked).
+
+**Caveat for `se=:bootstrap` on a masked network**: the bootstrap *simulates*
+from the fitted model, and the MH sampler conditions masked dyads on their
+face value (it cannot yet simulate them). The point estimate is
+available-case, but the bootstrap SEs around it are not; a warning is
+emitted.
 """
 function mple(model::ERGMModel{T}; verbose::Bool=false,
               se::Symbol=:hessian,
@@ -225,19 +235,27 @@ function mple(model::ERGMModel{T}; verbose::Bool=false,
         :mple,
         fit.converged,
         nothing,
-        se
+        se,
+        n_missing_dyads(model.network) == 0 ? :none : :available_case
     )
 end
 
+# MPLE is the ecosystem's declared missing-data-capable ERGM estimator: it
+# drops masked dyads from the pseudo-likelihood (available-case), which is a
+# principled treatment, not a face-value read.
+supports_missing(::typeof(mple)) = true
+
 # Parametric-bootstrap covariance of the MPLE: simulate n_boot networks at
-# θ̂, refit the MPLE on each (in parallel — the refits are deterministic
-# given the simulated networks), and return the empirical covariance and
-# SEs of the refitted coefficients.
+# θ̂, refit the MPLE on each, and return the empirical covariance and SEs of
+# the refitted coefficients.
+#
+# The loop itself is `Networks.bootstrap_cov` — the ONE shared bootstrap of the
+# ecosystem (Networks.jl `src/bootstrap.jl`), which the count/rank/multilayer
+# MPLEs and REM's repeated control sampling also call. This function supplies
+# only the two callbacks that are ERGM's: how to simulate at θ̂, and how to refit.
 function _mple_bootstrap_cov(model::ERGMModel, θ̂::Vector{Float64};
                              n_boot::Int, boot_burnin, boot_interval,
                              rng::AbstractRNG, verbose::Bool)
-    n_boot >= 2 || throw(ArgumentError("n_boot must be at least 2"))
-    p = length(θ̂)
     n_dyads = _n_dyads(model)
     burnin = something(boot_burnin, 20 * n_dyads)
     interval = something(boot_interval, max(100, n_dyads ÷ 10))
@@ -245,20 +263,26 @@ function _mple_bootstrap_cov(model::ERGMModel, θ̂::Vector{Float64};
     if verbose
         println("Parametric bootstrap: simulating $n_boot networks at the MPLE...")
     end
-    sims = sample_networks(model, θ̂; n_sim=n_boot, burnin=burnin,
-                           interval=interval, rng=rng)
 
-    boot_coefs = Matrix{Float64}(undef, n_boot, p)
-    Threads.@threads for b in 1:n_boot
-        # Same (already materialized) formula, simulated network. The
-        # simulated networks carry the observed network's attributes, so
-        # re-validation/materialization are no-ops.
-        boot_model = ERGMModel(model.formula, sims[b]; reference=model.reference)
-        boot_coefs[b, :] = _mple_fit(boot_model).coefficients
-    end
+    # The MPLE point estimate is available-case, but the bootstrap has to
+    # *simulate*, and the sampler can only condition masked dyads on their
+    # face value. Say so, and opt in explicitly rather than tripping the
+    # sampler's own guard.
+    _warn_condition_on_face(model.network,
+                            "the MPLE parametric bootstrap (`se=:bootstrap`)")
 
-    V = cov(boot_coefs)
-    return Matrix(V), sqrt.(max.(diag(V), 0.0))
+    simulate(rng, B) = sample_networks(model, θ̂; n_sim=B, burnin=burnin,
+                                       interval=interval, rng=rng,
+                                       missing=:condition_on_face)
+
+    # Same (already materialized) formula, simulated network. The simulated
+    # networks carry the observed network's attributes, so re-validation and
+    # materialization are no-ops.
+    refit(sim) = _mple_fit(ERGMModel(model.formula, sim;
+                                     reference=model.reference)).coefficients
+
+    boot = bootstrap_cov(refit, simulate, θ̂; n_boot=n_boot, rng=rng)
+    return boot.vcov, boot.se
 end
 
 """

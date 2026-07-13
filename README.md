@@ -23,11 +23,11 @@ This package is a Julia port of the R `ergm` package from the StatNet collection
 ## Installation
 
 Requires Julia 1.12+. ERGM.jl depends on the unregistered
-[Network.jl](https://github.com/statistical-network-analysis-with-Julia/Network.jl) package, which must be added first:
+[Networks.jl](https://github.com/statistical-network-analysis-with-Julia/Networks.jl) package, which must be added first:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Network.jl")
+Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/Networks.jl")
 Pkg.add(url="https://github.com/statistical-network-analysis-with-Julia/ERGM.jl")
 ```
 
@@ -46,7 +46,7 @@ then wire the packages together with no ordered installs needed.
 ## Quick Start
 
 ```julia
-using Network
+using Networks
 using ERGM
 
 # Observed network: Padgett's Florentine marriage ties (bundled dataset)
@@ -177,7 +177,7 @@ accurate than one-jump importance sampling.
 
 ### Missing (unobserved) dyads
 
-If dyads of the network are masked as missing with Network.jl's
+If dyads of the network are masked as missing with Networks.jl's
 `set_missing_dyad!` (tie status unobserved — distinct from "no tie"):
 
 - **MPLE** excludes masked dyads from the design matrix: they are not
@@ -222,7 +222,7 @@ the caller's `rng`, so results are also independent of the thread count.
 
 ## Goodness-of-Fit
 
-`gof` is a method of the ecosystem-wide `Network.gof` generic — the same
+`gof` is a method of the ecosystem-wide `Networks.gof` generic — the same
 verb works on every fitted model in the ecosystem. For directed networks
 the degree comparison is split into in- and out-degree distributions
 (`:idegree`/`:odegree`), as in R ergm:

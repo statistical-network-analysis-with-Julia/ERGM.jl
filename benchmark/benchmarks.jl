@@ -15,7 +15,7 @@
 
 using BenchmarkTools
 using ERGM
-using Network
+using Networks
 using Random
 
 # ---------------------------------------------------------------------------

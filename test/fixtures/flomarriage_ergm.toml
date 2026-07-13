@@ -1,0 +1,93 @@
+name = "flomarriage_ergm"
+
+[provenance]
+r_version = "4.6.1"
+ergm_version = "4.12.0"
+network_version = "1.20.0"
+seed = 20260713
+script = "test/fixtures/r/flomarriage_ergm.R"
+date = "2026-07-13"
+dataset = "ergm::flomarriage (Padgett): 16 Florentine families, 20 undirected marriage ties, wealth covariate"
+model_dyad_independent = "flomarriage ~ edges + nodecov(\"wealth\") -- fitted by ergm(), which uses logistic regression (MPLE = exact MLE) for dyad-independent formulas"
+model_dyad_dependent = "flomarriage ~ edges + gwesp(0.5, fixed=TRUE) -- fitted by MCMLE"
+mcmc_control = "control.ergm(MCMC.samplesize=4096, MCMC.burnin=16384, MCMC.interval=1024)"
+replication_seeds = "101,202,303,404,505"
+
+[tolerance]
+# Summary statistics are a DETERMINISTIC function of the observed graph --
+# no estimator, no simulation. Machine precision, and any disagreement is a
+# bug in a term formula, full stop.
+summary_statistics = 1e-9
+#
+# DYAD-INDEPENDENT FIT. The likelihood factorizes over dyads, so the
+# pseudo-likelihood IS the likelihood and both implementations are solving
+# the SAME strictly-convex logistic regression to convergence. No Monte
+# Carlo is involved on either side. The only difference two correct
+# implementations can have is optimizer termination: R uses IRLS to ~1e-8,
+# ERGM.jl uses L-BFGS. 1e-6 is well inside both, and is ~1e-4 of the
+# smallest standard error in the model. If this fails it is a BUG -- do not
+# loosen it.
+di_coefficients = 1e-6
+di_std_errors = 1e-6
+#
+# DYAD-DEPENDENT FIT (gwesp). Read `mcmle_seed_sd` in [values] first: that
+# is R refitting this very model under five further seeds and disagreeing
+# with itself. It is the Monte-Carlo width of the MCMLE estimator, and no
+# cross-implementation tolerance can honestly sit below it.
+#
+# Measured: R's seed-to-seed sd here is 0.0057 (edges) and 0.0059 (gwesp),
+# and the frozen fit at seed 20260713 sits ~1.1 of those sds from R's own
+# five-seed mean -- so the fixture VALUE itself carries that much noise, and
+# the tolerance has to cover R's single-run error before it covers anything
+# about Julia.
+#
+# The Julia side compares the MEAN of five ERGM.jl MCMLE fits at declared
+# seeds, whose own Monte-Carlo error is sd/sqrt(5). Observed gaps:
+#   |mean(ERGM.jl) - R| coefficients: 0.0016 (edges), 0.00034 (gwesp)
+#   |mean(ERGM.jl) - R| std errors  : 0.0052 (edges), 0.00075 (gwesp)
+# Every one of those is BELOW R's own seed-to-seed sd -- the two
+# implementations differ by less than R differs from itself.
+#
+# 0.03 is ~5x R's single-run sd (so a green test is not luck) and is 8% of
+# the edges standard error and 11% of the gwesp standard error -- a
+# discrepancy large enough to move a published conclusion cannot hide under
+# it. It is NOT chosen to make the test pass: it has a ~6x margin over the
+# largest gap actually observed.
+dd_coefficients = 0.03
+dd_std_errors = 0.03
+#
+# NOTE, on the record: ERGM.jl's MCMLE point estimate for this model has
+# ZERO seed-to-seed variance, because its convergence test fires at
+# iteration 1 (max t-ratio 0.006, Hotelling p = 0.87) BEFORE any Newton
+# update is applied, so it returns the MPLE unchanged. The MPLE happens to
+# satisfy the moment condition E_theta[g] = g_obs to within Monte-Carlo
+# error on this network, so that is a defensible stopping point rather than
+# a wrong answer -- and indeed it lands within R's own noise. But statnet
+# always takes at least one MCMLE step, and a reader comparing the two
+# should know the Julia number is a pseudo-likelihood estimate that passed
+# an MCMC convergence check, not the output of an MCMC-driven update. The
+# ERGM.jl testset asserts this explicitly so the day it changes is visible.
+
+[values]
+# --- observed graph, deterministic ---------------------------------------
+summary_statistic_names = ["edges", "nodecov.wealth", "gwesp.fixed.0.5"]
+summary_statistics = [20, 2168, 8.3934693402873677]
+
+# --- (a) dyad-independent: MPLE == exact ML, compared at 1e-6 ------------
+di_terms = ["edges", "nodecov.wealth"]
+di_coefficients = [-2.5949290317864602, 0.010545912833824604]
+di_std_errors = [0.53605603993959339, 0.0046742550755461409]
+di_loglik = -51.554286195409944
+di_aic = 107.10857239081989
+
+# --- (b) dyad-dependent: MCMLE, compared against measured MC width -------
+dd_terms = ["edges", "gwesp.fixed.0.5"]
+dd_coefficients = [-1.7213977237745193, 0.10480453255429474]
+dd_std_errors = [0.36646598434780725, 0.26293248950816361]
+
+# ergm disagreeing with ITSELF across five further seeds: the Monte-Carlo
+# floor under every dyad-dependent tolerance above.
+mcmle_seed_sd = [0.0056728247741288972, 0.0059057237789553376]
+mcmle_seed_mean = [-1.7116734309284136, 0.0981854608767532]
+mcmle_seed_min = [-1.7165565082886753, 0.090612009123580056]
+mcmle_seed_max = [-1.7023709927391149, 0.10580989641252959]

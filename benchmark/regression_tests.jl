@@ -10,7 +10,7 @@
 # the loops STAY allocation-free rather than tracking a noisy byte budget.
 
 using ERGM
-using Network
+using Networks
 using Random
 using Test
 

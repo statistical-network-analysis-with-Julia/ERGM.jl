@@ -17,7 +17,7 @@ so results are also independent of the number of threads.
               n_samples::Int=100, burnin::Int=10000, interval::Int=1000,
               rng::AbstractRNG=Random.default_rng(),
               start_net::Union{Nothing,Network}=nothing,
-              return_networks::Bool=false)
+              return_networks::Bool=false, missing::Symbol=:error)
         -> (stats::Matrix{Float64}, networks::Union{Nothing,Vector{<:Network}})
 
 Run one Metropolis–Hastings edge-toggle chain of the ERGM `exp(θ'g(y))`
@@ -30,10 +30,12 @@ step proposes toggling a uniformly random dyad and accepts with probability
 `min(1, exp(±θ'Δ))`, where `Δ` is the add-direction change statistic
 vector of the dyad.
 
-Dyads masked as missing (`Network.set_missing_dyad!`) are never proposed:
-they are held fixed at their face value (edge present/absent as stored)
-throughout the chain, i.e. the sampler conditions on the face values of the
-unobserved dyads. Throws `ArgumentError` if every dyad is masked.
+The sampler cannot simulate unobserved ties: it can only *freeze* a dyad
+masked as missing (`Networks.set_missing_dyad!`) at its stored face value
+(edge present/absent as recorded), never proposing it and thereby
+conditioning on it. Reinterpreting an unobserved tie as an observed one is
+never silent, so a masked network is rejected unless the caller opts in with
+`missing=:condition_on_face`. Throws `ArgumentError` if every dyad is masked.
 
 # Arguments
 - `model::ERGMModel`: Model specification (terms + network template). The
@@ -50,6 +52,8 @@ unobserved dyads. Throws `ArgumentError` if every dyad is masked.
   `model.network` (attributes are preserved either way).
 - `return_networks::Bool=false`: Also collect a copy of the network at
   every sampling point.
+- `missing::Symbol=:error`: `:error` rejects a network with masked dyads;
+  `:condition_on_face` explicitly holds them at their face value.
 
 # Returns
 A NamedTuple `(stats, networks)`:
@@ -70,11 +74,14 @@ function mh_sample(model::ERGMModel{T}, θ::Vector{Float64};
                    interval::Int=1000,
                    rng::AbstractRNG=Random.default_rng(),
                    start_net::Union{Nothing,Network}=nothing,
-                   return_networks::Bool=false) where T
+                   return_networks::Bool=false,
+                   missing::Symbol=:error) where T
     length(θ) == length(model.formula.terms) ||
         throw(ArgumentError("length(θ) = $(length(θ)) does not match the " *
                             "number of model terms ($(length(model.formula.terms)))"))
-    net = _copy_network(isnothing(start_net) ? model.network : start_net)
+    src_net = isnothing(start_net) ? model.network : start_net
+    _guard_missing(src_net, missing; context="mh_sample")
+    net = _copy_network(src_net)
     stats, networks = _mh_run!(rng, net, model.formula.terms, θ, model.directed,
                                n_samples, burnin, interval, return_networks)
     return (stats=stats, networks=return_networks ? networks : nothing)
@@ -148,9 +155,17 @@ end
 """
     simulate_ergm(result::ERGMResult; n_sim::Int=1, burnin::Int=10000,
                   interval::Int=1000, rng::AbstractRNG=Random.default_rng(),
-                  n_chains::Int=min(n_sim, 4)) -> Vector{Network}
+                  n_chains::Int=min(n_sim, 4),
+                  missing::Symbol=:error) -> Vector{Network}
 
 Simulate networks from a fitted ERGM (at `result.coefficients`).
+
+If the fitted network has dyads masked as missing, the simulation cannot
+reinterpret them: the sampler would silently freeze each unobserved tie at
+its stored face value and report it as a simulated tie. That requires the
+explicit `missing=:condition_on_face` opt-in (a warning is emitted); the
+default `missing=:error` refuses. This holds even for an MPLE fit, whose
+*point estimate* excluded the masked dyads: simulation is a separate act.
 
 # Arguments
 - `result::ERGMResult`: Fitted ERGM result
@@ -159,6 +174,8 @@ Simulate networks from a fitted ERGM (at `result.coefficients`).
 - `interval::Int=1000`: Steps between samples
 - `rng::AbstractRNG`: Source of all random draws (reproducible seeding)
 - `n_chains::Int`: Number of independent chains (see [`sample_networks`](@ref))
+- `missing::Symbol=:error`: Missing-dyad policy (`:error` or
+  `:condition_on_face`)
 
 # Returns
 - Vector of simulated Network objects
@@ -168,10 +185,15 @@ function simulate_ergm(result::ERGMResult{T};
                        burnin::Int=10000,
                        interval::Int=1000,
                        rng::AbstractRNG=Random.default_rng(),
-                       n_chains::Int=min(n_sim, 4)) where T
+                       n_chains::Int=min(n_sim, 4),
+                       missing::Symbol=:error) where T
+    method = _guard_missing(result.model.network, missing;
+                            context="simulate_ergm")
+    method === :condition_on_face &&
+        _warn_condition_on_face(result.model.network, "simulation")
     return sample_networks(result.model, result.coefficients;
                            n_sim=n_sim, burnin=burnin, interval=interval,
-                           rng=rng, n_chains=n_chains)
+                           rng=rng, n_chains=n_chains, missing=missing)
 end
 
 """
@@ -179,7 +201,8 @@ end
                     n_sim::Int=1, burnin::Int=10000, interval::Int=1000,
                     start_net::Union{Nothing,Network}=nothing,
                     rng::AbstractRNG=Random.default_rng(),
-                    n_chains::Int=min(n_sim, 4)) -> Vector{Network}
+                    n_chains::Int=min(n_sim, 4),
+                    missing::Symbol=:error) -> Vector{Network}
 
 Sample networks from an ERGM specification.
 
@@ -201,6 +224,10 @@ keep results thread-count-independent.
   attributes)
 - `rng::AbstractRNG`: Source of all random draws
 - `n_chains::Int`: Number of independent chains
+- `missing::Symbol=:error`: Missing-dyad policy. `:error` refuses a network
+  with masked dyads; `:condition_on_face` explicitly freezes each masked
+  dyad at its stored face value in every chain (`_random_network` starting
+  states preserve them too).
 """
 function sample_networks(model::ERGMModel{T}, θ::Vector{Float64};
                          n_sim::Int=1,
@@ -208,7 +235,10 @@ function sample_networks(model::ERGMModel{T}, θ::Vector{Float64};
                          interval::Int=1000,
                          start_net::Union{Nothing,Network}=nothing,
                          rng::AbstractRNG=Random.default_rng(),
-                         n_chains::Int=min(n_sim, 4)) where T
+                         n_chains::Int=min(n_sim, 4),
+                         missing::Symbol=:error) where T
+    _guard_missing(isnothing(start_net) ? model.network : start_net, missing;
+                   context="sample_networks")
     n_sim <= 0 && return Network{T}[]
     n_chains = clamp(n_chains, 1, n_sim)
 

@@ -9,7 +9,8 @@ Provides functions for assessing ERGM fit and MCMC convergence.
         stats::Vector{Symbol}=[:degree, :esp, :distance],
         burnin::Int=10000, interval::Int=1000,
         rng::AbstractRNG=Random.default_rng(),
-        n_chains::Int=min(n_sim, 4), esp_type::Symbol=:OTP) -> GOFResult
+        n_chains::Int=min(n_sim, 4), esp_type::Symbol=:OTP,
+        missing::Symbol=:error) -> GOFResult
 
 Goodness-of-fit assessment for a fitted ERGM.
 
@@ -38,12 +39,17 @@ either-direction count).
 - `n_chains::Int`: Number of independent simulation chains
 - `esp_type::Symbol=:OTP`: Directed shared-partner type for `:esp`
   (ignored for undirected networks)
+- `missing::Symbol=:error`: Missing-dyad policy. GOF reads the *observed*
+  network's degree/ESP/geodesic distributions at face value **and** simulates
+  from the model, so a masked dyad would be silently reinterpreted as an
+  observed tie on both sides of the comparison. `:error` (the default)
+  refuses; `:condition_on_face` is the explicit, warned opt-in.
 
 # Returns
-A `Network.GOFResult` with one `GOFStatistic` panel per requested statistic
+A `Networks.GOFResult` with one `GOFStatistic` panel per requested statistic
 (named `"degree"`, `"idegree"`, `"odegree"`, `"esp"`, `"distance"`).
 Per-level p-values are two-sided Monte-Carlo p-values computed with the
-shared `(1 + k)/(N + 1)` estimator (`Network.mc_pvalue`), so they
+shared `(1 + k)/(N + 1)` estimator (`Networks.mc_pvalue`), so they
 are never exactly zero. `show` renders the observed value, simulation
 envelope, and p-value per level.
 """
@@ -52,14 +58,22 @@ function gof(result::ERGMResult; n_sim::Int=100,
              burnin::Int=10000, interval::Int=1000,
              rng::AbstractRNG=Random.default_rng(),
              n_chains::Int=min(n_sim, 4),
-             esp_type::Symbol=:OTP)
+             esp_type::Symbol=:OTP,
+             missing::Symbol=:error)
     model = result.model
     obs_net = model.network
     directed = is_directed(obs_net)
 
+    # Missing-data guard: the observed panels below read the face value of
+    # every masked dyad, and the simulations freeze it there. Neither may
+    # happen without the caller having asked. (`simulate_ergm` emits the
+    # one warning on the opt-in path.)
+    _guard_missing(obs_net, missing; context="gof")
+
     # Simulate networks (parallel chains, deterministic per-chain seeds)
     sim_nets = simulate_ergm(result; n_sim=n_sim, burnin=burnin,
-                             interval=interval, rng=rng, n_chains=n_chains)
+                             interval=interval, rng=rng, n_chains=n_chains,
+                             missing=missing)
 
     panels = GOFStatistic[]
 

@@ -90,3 +90,64 @@ function newton_fit(loglik_grad_hess, θ0::AbstractVector{<:Real};
     return (θ=θ, se=se, vcov=vcov, loglik=ll, converged=converged,
             iterations=iterations)
 end
+
+"""
+    logistic_derivatives(X::Matrix{Float64}, y::AbstractVector{Bool};
+                         offset=nothing) -> Function
+
+The `(ll, grad, hess)` closure of a logistic log-likelihood on design matrix
+`X` and binary response `y`, ready for [`newton_fit`](@ref):
+
+    ℓ(β) = Σ_r [ y_r η_r − log(1 + e^{η_r}) ],   η = Xβ + offset
+    ∇ℓ   = X'(y − p),   ∇²ℓ = −X' diag(p(1−p)) X.
+
+Every ERGM-family pseudo-likelihood over dyad-independent rows is this
+likelihood — `ERGMMulti`'s MPLE over the within-layer dyads, `TERGM`'s CMPLE
+over the free dyads of the auxiliary networks, `ERGMRank`'s swap MPLE over the
+(ego, alter-pair) comparisons (with `y ≡ true`: the observed order is always the
+"success") — so it lives here, next to `newton_fit`, rather than pasted into
+three packages. `offset` (a fixed per-row addition to the linear predictor) is
+`ergm`'s offset mechanism: `ERGMMulti` uses it for terms whose coefficients are
+held fixed.
+
+**Allocation** (review finding 15): the workspaces are allocated ONCE, when the
+closure is built. Each evaluation allocates only the length-`p` gradient and
+`p×p` Hessian it returns — never the `n×p` weighted design or a per-row `x * x'`
+outer product. Downstream packages pin this with `@allocated` regression tests.
+"""
+function logistic_derivatives(X::AbstractMatrix{Float64},
+                              y::AbstractVector{Bool};
+                              offset::Union{Nothing,AbstractVector{Float64}}=nothing)
+    n, p = size(X)
+    length(y) == n ||
+        throw(ArgumentError("y has $(length(y)) entries but X has $n rows"))
+    offset === nothing || length(offset) == n ||
+        throw(ArgumentError("offset has $(length(offset)) entries but X has $n rows"))
+
+    η = Vector{Float64}(undef, n)
+    resid = Vector{Float64}(undef, n)
+    WX = Matrix{Float64}(undef, n, p)
+
+    return function (β)
+        n == 0 && return (0.0, zeros(p), zeros(p, p))
+        mul!(η, X, β)
+        ll = 0.0
+        @inbounds for r in 1:n
+            ηr = offset === nothing ? η[r] : η[r] + offset[r]
+            pr = 1.0 / (1.0 + exp(-ηr))
+            # log p and log(1−p), each computed on its stable branch
+            ll += y[r] ? (ηr < 0 ? ηr - log1p(exp(ηr)) : -log1p(exp(-ηr))) :
+                         (ηr < 0 ? -log1p(exp(ηr)) : -ηr - log1p(exp(-ηr)))
+            resid[r] = (y[r] ? 1.0 : 0.0) - pr
+            w = pr * (1 - pr)
+            for k in 1:p
+                WX[r, k] = w * X[r, k]
+            end
+        end
+        grad = Vector{Float64}(undef, p)
+        mul!(grad, transpose(X), resid)
+        hess = Matrix{Float64}(undef, p, p)
+        mul!(hess, transpose(X), WX, -1.0, 0.0)
+        return ll, grad, hess
+    end
+end
