@@ -1,0 +1,129 @@
+name = "ergm_terms"
+
+[provenance]
+r_version = "4.6.1"
+ergm_version = "4.12.0"
+network_version = "1.20.0"
+seed = 20260909
+script = "test/fixtures/r/ergm_terms.R"
+date = "2026-09-09"
+datasets = "ergm::flomarriage (Padgett: 16 Florentine families, 20 undirected marriage ties, wealth covariate); ergm::samplike (Sampson monastery, 18 monks, 88 directed like-ties, from data(sampson))"
+model_flo_summary = "flomarriage ~ edges + gwesp(0, fixed=TRUE) + gwdsp(0, fixed=TRUE) + gwdegree(0, fixed=TRUE) + gwdegree(1, fixed=TRUE) + degree(0:2) + absdiff(\"wealth\", pow=2) + absdiff(\"wealth\") -- summary() only"
+model_flo_mple = "flomarriage ~ edges + degree(0:2) -- ergm(estimate=\"MPLE\"); dyad-dependent, so pseudo-likelihood on BOTH sides"
+model_separated = "30-node undirected network, 12 ties between different groups (group = (A,B,C)[v mod 3]) ~ edges + nodematch(\"group\") -- ergm() with its default drop=TRUE; nodematch.group = 0 is at its smallest attainable value"
+model_mixed_sign = "8-node undirected network, x = -4..3, tie iff x_i + x_j <= 0 ~ edges + nodecov(\"x\") -- ergm(estimate=\"MPLE\"); nodecov.x = -50 is at its smallest attainable value although its change statistic takes both signs"
+model_combination_separated = "6-node undirected network, x = (1,2,1,2,3,-2), z = (-1,-2,3,0,-3,-1), tie iff (x_i + z_i) + (x_j + z_j) > 0 ~ edges + nodecov(\"x\") + nodecov(\"z\") -- ergm(estimate=\"MPLE\"); no single statistic is at its attainable boundary, but the design is separated by nodecov.x + nodecov.z"
+model_samplike_gof = "samplike ~ edges (MPLE) -- gof(GOF = ~distance + idegree + odegree + esp) observed panels only"
+model_samplike_summary = "samplike ~ edges + mutual + ostar(2) + istar(2) + gwidegree(0.5, fixed=TRUE) + gwodegree(0.5, fixed=TRUE) + triangle + ttriple + gwesp(0.5, fixed=TRUE) + gwdsp(0.5, fixed=TRUE) + dgwesp(0.5, fixed=TRUE, type=ITP/OSP/ISP) + dgwdsp(0.5, fixed=TRUE, type=ITP/OSP/ISP) -- summary() only; the directed gwesp/gwdsp labels carry the type"
+
+[tolerance]
+# Summary statistics are a DETERMINISTIC function of the observed graph --
+# no estimator, no simulation. Machine precision; any disagreement is a bug
+# in a term formula (or in the Degree(0:2) expansion), full stop.
+flo_summary = 1e-9
+samplike_summary = 1e-9
+#
+# MPLE vs MPLE. edges + degree(0:2) is dyad-DEPENDENT, so this is not an
+# MLE comparison and says nothing about the MLE -- but the pseudo-likelihood
+# is the SAME strictly-concave logistic-regression objective on both sides
+# (R: glm on the change statistics via estimate="MPLE"; ERGM.jl: Newton on
+# the compressed change-statistic design), and both solve it to convergence.
+# The only difference two correct implementations can have is optimizer
+# termination (R's IRLS ~1e-8, ERGM.jl's Newton 1e-8). 1e-6 is well inside
+# both and ~1e-6 of the smallest standard error. A failure is a BUG in the
+# design (the Degree(0:2) expansion, the change statistics) -- do not loosen.
+flo_mple_coefficients = 1e-6
+flo_mple_std_errors = 1e-6
+#
+# Drop semantics (separated nodematch): the finite coefficient is the exact
+# logistic regression on the 300 dyads the dropped term does not touch and
+# the dropped one is -Inf on both sides (isapprox(-Inf, -Inf) holds), so
+# the optimizer-precision argument above applies unchanged. logLik, AIC and
+# BIC follow from them in closed form; 1e-5 covers the rounding of a sum of
+# 300 log-probabilities. df and nobs are integers, compared exactly.
+sep_coefficients = 1e-6
+sep_std_errors = 1e-6
+sep_loglik = 1e-5
+sep_aic = 1e-5
+sep_bic = 1e-5
+#
+# The mixed-sign statistics and the gof observed panels are deterministic
+# functions of the observed graph: machine precision.
+mix_summary = 1e-9
+sep2_summary = 1e-9
+samplike_gof_distance = 1e-9
+samplike_gof_idegree = 1e-9
+samplike_gof_odegree = 1e-9
+samplike_gof_esp = 1e-9
+
+[values]
+# --- flomarriage (undirected): decay-0 GW terms, R's labels, degree(0:2),
+# absdiff(pow=2) (labelled absdiff2.wealth) and absdiff (absdiff.wealth) ---
+flo_summary_names = ["edges", "gwesp.fixed.0", "gwdsp.fixed.0", "gwdeg.fixed.0", "gwdeg.fixed.1", "degree0", "degree1", "degree2", "absdiff2.wealth", "absdiff.wealth"]
+flo_summary = [20, 8, 43, 15, 26.567841619066677, 1, 4, 2, 91570, 1146]
+
+# --- flomarriage MPLE of edges + degree(0:2): coefficients and inverse-
+# pseudo-information standard errors (vcov of an estimate="MPLE" fit) ------
+flo_mple_terms = ["edges", "degree0", "degree1", "degree2"]
+flo_mple_coefficients = [-2.7422291952249074, -2.6012033149236813, -1.5369303752232644, -2.0138893057005918]
+flo_mple_std_errors = [0.63002064533578772, 1.4716292005875053, 0.99313398842118417, 0.56792651130176752]
+
+# --- samplike (directed): edge list (tail -> head, 1-based) and statistics.
+# `ttriple` has no separate ERGM.jl term: `Triangle()` on a directed network
+# is statnet's `triangle` (= ttriple + ctriple), compared here; `ttriple` is
+# recorded for reference only. Positions 9-16 are the directed shared-partner
+# terms: gwesp/gwdsp with the default type (R's directed labels
+# gwesp.OTP.fixed.0.5 / gwdsp.OTP.fixed.0.5) and the typed dgwesp/dgwdsp rows
+# (ITP, OSP, ISP) -- every one summed over ORDERED dyads in R's C code. ------
+samplike_n = 18
+samplike_tails = [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 16, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18]
+samplike_heads = [2, 3, 5, 8, 12, 14, 1, 7, 12, 14, 15, 1, 2, 13, 17, 18, 5, 6, 10, 11, 1, 4, 9, 11, 13, 1, 4, 5, 9, 1, 2, 8, 12, 16, 1, 2, 4, 6, 9, 10, 5, 8, 12, 16, 4, 5, 8, 9, 13, 14, 4, 5, 8, 14, 16, 1, 2, 7, 14, 5, 7, 18, 1, 2, 11, 12, 15, 1, 2, 5, 7, 12, 14, 1, 2, 7, 12, 15, 2, 3, 13, 18, 1, 2, 3, 7, 13, 17]
+samplike_summary_names = ["edges", "mutual", "ostar2", "istar2", "gwideg.fixed.0.5", "gwodeg.fixed.0.5", "triangle", "ttriple", "gwesp.OTP.fixed.0.5", "gwdsp.OTP.fixed.0.5", "gwesp.ITP.fixed.0.5", "gwesp.OSP.fixed.0.5", "gwesp.ISP.fixed.0.5", "gwdsp.ITP.fixed.0.5", "gwdsp.OSP.fixed.0.5", "gwdsp.ISP.fixed.0.5"]
+samplike_summary = [88, 28, 178, 233, 28.307098616811476, 29.239527904462474, 193, 154, 91.879823680176401, 256.03238794093704, 78.398279657390475, 96.005659632730783, 91.103063402087116, 256.03238794093704, 316.08521277499278, 229.13569712691483]
+
+# --- what R refuses (conditionMessage of the error), so the fixture documents
+# that ERGM.jl's refusals mirror statnet's -------------------------------
+r_error_kstar_directed = "In term ‘kstar’ in package ‘ergm’: Term may not be used with networks with directed==TRUE."
+r_error_gwdegree_directed = "In term ‘gwdegree’ in package ‘ergm’: Term may not be used with networks with directed==TRUE."
+r_error_nodecov_na = "In term ‘nodecov’ in package ‘ergm’: Attribute ‘\"x\"’ has missing data, which is not currently supported by ergm."
+
+# --- (e) R's drop=TRUE on the perfectly separated nodematch (30 nodes):
+# the -Inf coefficient, SE 0, and the df/nobs rule behind AIC/BIC -- df is
+# the number of FINITE coefficients, logLik's nobs the dyads the dropped
+# term does not touch (300 of 435), while nobs(fit) stays every dyad ------
+sep_terms = ["edges", "nodematch.group"]
+sep_coefficients = [-3.1780538303251089, -inf]
+sep_std_errors = [0.29462687053314923, 0]
+sep_loglik = -50.38324432025189
+sep_df = 1
+sep_loglik_nobs = 300
+sep_nobs = 435
+sep_aic = 102.76648864050378
+sep_bic = 106.47027111515999
+
+# --- (f) the mixed-sign boundary column (8 nodes, x = -4..3, tie iff
+# x_i + x_j <= 0): statistics, and the warning R's mple.existence raises ----
+mix_n = 8
+mix_x = [-4, -3, -2, -1, 0, 1, 2, 3]
+mix_summary_names = ["edges", "nodecov.x"]
+mix_summary = [19, -50]
+r_warning_mple_nonexistent = "The MPLE does not exist!"
+
+# --- (f') separated by a COMBINATION of columns (6 nodes; no single
+# column at its boundary): statistics and R's mple.existence warning -------
+sep2_n = 6
+sep2_x = [1, 2, 1, 2, 3, -2]
+sep2_z = [-1, -2, 3, 0, -3, -1]
+sep2_summary_names = ["edges", "nodecov.x", "nodecov.z"]
+sep2_summary = [8, 23, 2]
+r_warning_mple_nonexistent_combination = "The MPLE does not exist!"
+
+# --- (g) gof observed panels on samplike: distance over ORDERED pairs
+# (directed), the last entry the unreachable pairs R labels "Inf";
+# idegree/odegree over 0:(n-1); esp (OTP) over 0:(n-2) -------------------
+samplike_gof_distance_labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "Inf"]
+samplike_gof_distance = [88, 136, 77, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+samplike_gof_idegree = [0, 0, 3, 5, 1, 3, 2, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0]
+samplike_gof_odegree = [0, 0, 0, 1, 5, 7, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+samplike_gof_esp_labels = [".OTP0", ".OTP1", ".OTP2", ".OTP3", ".OTP4", ".OTP5", ".OTP6", ".OTP7", ".OTP8", ".OTP9", ".OTP10", ".OTP11", ".OTP12", ".OTP13", ".OTP14", ".OTP15", ".OTP16"]
+samplike_gof_esp = [19, 23, 20, 14, 11, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
