@@ -635,6 +635,8 @@ rewritten for O(deg) scaling.
 
 ### Changed
 
+- Documentation uses the default Documenter themes, with a new package-specific
+  SVG icon and browser favicon in the official Julia logo colors.
 - **The masked-network refusal is ONE message** (panel item 5 follow-up):
   `_guard_missing` passes ERGM's opt-in bullets (`missing=:mle`,
   `missing=:condition_on_face`) through `Networks.require_observed`'s new
