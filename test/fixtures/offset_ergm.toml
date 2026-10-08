@@ -1,0 +1,79 @@
+name = "offset_ergm"
+
+[provenance]
+r_version = "4.6.1"
+ergm_version = "4.12.0"
+network_version = "1.20.0"
+seed = 20261002
+script = "test/fixtures/r/offset_ergm.R"
+date = "2026-10-02"
+model_a = "faux.mesa.high ~ edges + nodematch(\"Grade\") + offset(nodemix(\"Grade\", levels2=c(2,4))), offset.coef=c(-Inf,-Inf) -- ergm() (logistic regression: MPLE = MLE)"
+model_b = "faux.mesa.high ~ offset(edges) + nodematch(\"Grade\"), offset.coef=-5"
+model_c = "flomarriage ~ offset(edges) + gwesp(0.5, fixed=TRUE), offset.coef=-1.7 -- MCMLE at ergm() defaults, eleven seeds"
+
+[tolerance]
+# (a), (b): dyad-independent -- the SAME logistic regression on both sides,
+# solved to convergence (R IRLS ~1e-8, ERGM.jl Newton 1e-8). A failure is a
+# bug; do not loosen. The offset coefficients are fixed (-Inf, -5) and the
+# SEs of the offsets are 0 on both sides.
+a_coefficients = 1e-6
+a_std_errors = 1e-6
+a_loglik = 1e-5
+a_aic = 1e-5
+a_bic = 1e-5
+b_coefficients = 1e-6
+b_loglik = 1e-5
+b_aic = 1e-5
+b_bic = 1e-5
+# ... except (b)'s standard error AS SHIPPED: R's glm stops ~2e-6 short of the
+# closed-form value (b_exact_*), which ERGM.jl reproduces to ~1e-16; the
+# as-shipped number is compared at 1e-5 (a tolerance that measures R), the
+# exact one at 1e-9 (the tolerance that measures Julia).
+b_std_errors = 1e-5
+b_exact_coefficient = 1e-9
+b_exact_std_error = 1e-9
+# (d): the same argument; R's glm slack shows in the SEs (2e-7), hence 1e-5.
+d_coefficients = 1e-6
+d_std_errors = 1e-5
+d_loglik = 1e-5
+d_aic = 1e-5
+d_bic = 1e-5
+#
+# (c): one ERGM.jl MCMLE fit against R's eleven-seed mean, per coefficient:
+# 4*sqrt(sd_R^2 + sd_R^2/11) floored at a tenth of R's standard error (the
+# rule of mcmle_ergm.toml), emitted as c_coef_tolerance / c_se_tolerance.
+
+[values]
+a_terms = ["edges", "nodematch.Grade", "offset(mix.Grade.7.8)", "offset(mix.Grade.7.9)"]
+a_coefficients = [-5.6709148710305453, 2.4678692060672556, -inf, -inf]
+a_std_errors = [0.15838595495293781, 0.17739896966145957, 0, 0]
+a_loglik = -955.26989557983131
+a_df = 2
+a_aic = 1914.5397911596626
+a_bic = 1929.878610032001
+a_nobs = 20910
+b_terms = ["offset(edges)", "nodematch.Grade"]
+b_coefficients = [-5, 1.7969543364427893]
+b_std_errors = [0, 0.079899678653905515]
+b_loglik = -1000.7525577761432
+b_df = 1
+b_exact_coefficient = 1.7969543350367094
+b_exact_std_error = 0.079901712813890385
+b_aic = 2003.5051155522865
+b_bic = 2011.4530983447091
+d_tails = [1, 1, 1, 2, 2, 3, 4, 5, 6, 2, 8, 9, 5]
+d_heads = [2, 3, 4, 3, 4, 4, 5, 6, 7, 8, 9, 10, 9]
+d_terms = ["edges", "nodecov.x", "offset(nodematch.g.A)"]
+d_coefficients = [-3.5351396837246685, 0.16192224213000533, inf]
+d_std_errors = [1.7789422518854534, 0.13341777882621797, 0]
+d_loglik = -17.588089296608786
+d_df = 2
+d_aic = 39.176178593217571
+d_bic = 42.503301885476866
+c_terms = ["offset(edges)", "gwesp.fixed.0.5"]
+c_coef_mean = [-1.7, 0.094089688102274166]
+c_coef_seed_sd = [0, 0.0083057078201925465]
+c_se_mean = [0, 0.15903325568499904]
+c_se_seed_sd = [0, 0.0085328435156569425]
+c_coef_tolerance = [0, 0.034700115561408652]
+c_se_tolerance = [0, 0.035649057548216075]

@@ -1,0 +1,96 @@
+name = "mcmle_ergm"
+
+[provenance]
+r_version = "4.6.1"
+ergm_version = "4.12.0"
+network_version = "1.20.0"
+seed = 20261002
+script = "test/fixtures/r/mcmle_ergm.R"
+date = "2026-10-02"
+dataset = "ergm::faux.mesa.high (205 students, 203 undirected ties, Grade/Race/Sex) and ergm::flomarriage"
+model_a = "faux.mesa.high ~ edges + nodematch(\"Grade\") + nodematch(\"Race\") + gwesp(0.25, fixed=TRUE)"
+model_b = "model_a + gwdegree(0.5, fixed=TRUE)"
+model_c = "flomarriage ~ edges + triangle"
+control = "ergm() defaults: control.ergm(seed=s); (c) high precision: MCMC.samplesize=50000, MCMC.interval=2048, MCMLE.termination=\"precision\""
+replication_seeds = "101,202,303,404,505,606,707,808,909,1010"
+
+[tolerance]
+# Deterministic functions of the observed graph: machine precision.
+a_summary = 1e-9
+b_summary = 1e-9
+# The Florentine edges + triangle MPLE: the same convex logistic regression
+# solved to convergence on both sides -- optimizer precision.
+tri_mple = 1e-6
+#
+# (a)/(b) A SINGLE ERGM.jl MCMLE fit at its defaults is compared with R's
+# eleven-seed mean. The difference has variance sd_J^2 + sd_R^2/11; ERGM.jl's
+# own seed-to-seed sd (measured 0.0013-0.0061 on these models, 5 seeds) is
+# of R's order, so sd_R stands in for both: the per-coefficient tolerance is
+# 4*sqrt(sd_R^2 + sd_R^2/11) -- four standard deviations of the difference
+# under the hypothesis that the two estimators agree -- floored at a tenth
+# of R's standard error, the practical-equivalence margin of the flomarriage
+# fixture (0.03 there, 8-11% of a standard error). The floor is needed: two
+# MCMLE implementations with different MCMC designs (proposal, sample-size
+# adaptation) carry different O(1/ESS) finite-sample biases, and R's seed sd
+# on gwesp here (0.0015 over eleven fits) is below that. Measured before
+# freezing: five default ERGM.jl fits of (a) sit 0.0016-0.0076 from R's mean
+# on gwesp and 0.0014-0.010 on the other coefficients -- at most 7% of a
+# standard error. Emitted per coefficient in [values] as a_coef_tolerance /
+# b_coef_tolerance; the standard errors use the same rule on R's SE seed sd.
+#
+# (c) No ERGM.jl MCMLE fit may return tri_mple verbatim (the pre-0.2
+# defect: the convergence test ran before the first step), and the mean of
+# ten ERGM.jl fits must lie within 4 standard errors of the mean -- R's
+# ten-seed sd over sqrt(10), the width of R's own default estimator -- of
+# the high-precision MLE.
+tri_mean_sd_multiple = 4
+#
+# (d) One ERGM.jl bridge estimate (16 Simpson rungs) at R's coefficients
+# against R's 64-step mean: 4 x R's 16-step seed sd (the width of one
+# default estimate). The quadrature bias of the pre-0.2 trapezoid (-0.3 to
+# -0.5 here) is below that width; it is pinned exactly, on an enumerable
+# network, by the ERGM.jl testset instead.
+bridge_sd_multiple = 4
+
+[values]
+a_terms = ["edges", "nodematch.Grade", "nodematch.Race", "gwesp.fixed.0.25"]
+a_summary = [203, 163, 103, 131.75818528978758]
+b_terms = ["edges", "nodematch.Grade", "nodematch.Race", "gwesp.fixed.0.25", "gwdeg.fixed.0.5"]
+b_summary = [203, 163, 103, 131.75818528978758, 199.56573845237344]
+
+# --- (a) gwesp model at ergm() defaults, eleven seeds -------------------------
+a_coefficients = [-6.4128430928285347, 1.9970129082371681, 0.28722578020809264, 1.4463434131175774]
+a_std_errors = [0.16103729252188323, 0.16875655202839632, 0.12007688699581143, 0.11045539664464646]
+a_coef_mean = [-6.409924561407907, 1.989620491824579, 0.28502917435031078, 1.4490435894513152]
+a_coef_seed_sd = [0.0067313010519203268, 0.0080233343080582126, 0.0046704490143454373, 0.0014474848590368206]
+a_se_mean = [0.15669930980756613, 0.1658850318415343, 0.12235095344845028, 0.11024546485232237]
+a_se_seed_sd = [0.0024595079652633867, 0.0037086600486709218, 0.002843096248377881, 0.0025445973242854405]
+a_coef_tolerance = [0.028122458607609927, 0.033520397503096905, 0.019512499600268473, 0.011024546485232238]
+a_se_tolerance = [0.015669930980756613, 0.01658850318415343, 0.012235095344845029, 0.011024546485232238]
+a_loglik = [-868.76398862439407, -868.45771962087645, -868.63921325199487, -869.370637770548, -869.15561073424328, -867.88195275401847, -869.19523324534521, -868.85975764732245, -868.57283957861841, -869.18497844178728, -871.67927229819691]
+
+# --- (b) + gwdegree(0.5), eleven seeds -----------------------------------------
+b_coefficients = [-6.7015366424778229, 2.011040805172414, 0.31080754519278575, 1.5918620518254061, 0.28392757454542006]
+b_std_errors = [0.23910428423196659, 0.1642188443058834, 0.12298326762094658, 0.13961329083035931, 0.18276038909403067]
+b_coef_mean = [-6.709562459346774, 2.0189815899224044, 0.30900692114287914, 1.588429465223917, 0.29189968524657733]
+b_coef_seed_sd = [0.010530452407819017, 0.0083014968477828337, 0.0054802733995941494, 0.0027433455743474389, 0.0052166243857130652]
+b_se_mean = [0.24103369655038714, 0.16567671624597521, 0.12240001381602912, 0.13901232951900608, 0.17828652801794861]
+b_se_seed_sd = [0.0067558814693960186, 0.0025867305911159953, 0.0019139094695792087, 0.0029712468365168695, 0.0043243459724353348]
+b_coef_tolerance = [0.043994795311348048, 0.034682522692455607, 0.022895835537545109, 0.013901232951900608, 0.0217943458815903]
+b_se_tolerance = [0.028225152242567868, 0.016567671624597522, 0.012240001381602913, 0.013901232951900608, 0.01806652825015214]
+b_loglik = [-867.73912046133592, -867.0871118401999, -868.03888789394114, -868.28451285176038, -866.45760134281443, -867.91668339793068, -868.89614317929124, -867.76229977269213, -867.08288783553985, -867.52054017374928, -867.46622389813331]
+
+# --- (c) flomarriage edges + triangle -----------------------------------------
+tri_mple = [-1.7009354945816306, 0.22084884956677767]
+tri_mle_precise = [-1.6726817422948972, 0.1563106458253323]
+tri_mle_precise_se = [0.35147170499807928, 0.59377230881566079]
+tri_seed_mean = [-1.6643312715923209, 0.15679000607314125]
+tri_seed_sd = [0.033158968485787983, 0.03769777663204809]
+tri_seed_min = [-1.7118180534415461, 0.10206186407804146]
+tri_seed_max = [-1.6076027093677574, 0.20878742289218083]
+
+# --- (d) bridge log-likelihood of (a) at a_coefficients ----------------------
+bridge16 = [-868.73524033431704, -868.20331245675686, -868.529779173002, -868.19583172361445, -869.45790742514851, -869.29388638787111, -868.11750119080716, -868.82329064705061, -869.13531041812689, -868.82610700413852]
+bridge64 = [-868.24823170133516, -869.29304526673047, -868.3824591793408, -868.38228504189738, -869.05648109181584, -869.20405812169599, -868.28612450322532, -868.58321152784663, -868.01071746130776, -869.33507815483119]
+bridge64_mean = -868.67816920500263
+bridge16_seed_sd = 0.47234714854424464

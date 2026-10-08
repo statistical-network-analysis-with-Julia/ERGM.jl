@@ -1,0 +1,75 @@
+name = "flomarriage_missing_ergm"
+
+[provenance]
+r_version = "4.6.1"
+ergm_version = "4.12.0"
+network_version = "1.20.0"
+seed = 20260909
+script = "test/fixtures/r/flomarriage_missing_ergm.R"
+date = "2026-09-09"
+dataset = "ergm::flomarriage (Padgett): 16 Florentine families, 20 undirected marriage ties, wealth covariate; four dyads set to NA"
+masked_dyads = "(3,4), (1,9), (7,16), (2,11)"
+masked_face_values = "0, 1, 1, 0 -- 1 = the masked dyad is a tie in flomarriage, 0 = it is not"
+summary_convention = "statnet summary() evaluates the statistics with every NA dyad treated as absent (network.edgecount(na.omit=TRUE))"
+model_dyad_independent = "flomarriage[NA] ~ edges + nodecov(\"wealth\") -- ergm() fits the logistic regression on the 116 observed dyads (= available-case MPLE = exact MLE under dyad independence)"
+model_dyad_dependent = "flomarriage[NA] ~ edges + gwesp(0.5, fixed=TRUE) -- missing-data MCMLE (Handcock & Gile 2010): constrained chain over the NA dyads"
+mcmc_control = "control.ergm(MCMC.samplesize=4096, MCMC.burnin=16384, MCMC.interval=1024)"
+replication_seeds = "101,202,303,404,505"
+
+[tolerance]
+# Summary statistics on the masked network are a DETERMINISTIC function of
+# the observed graph under statnet's NA-as-absent convention. Machine
+# precision; any disagreement is a bug in a term formula or in the masking.
+summary_statistics = 1e-9
+#
+# DYAD-INDEPENDENT FIT WITH NA DYADS. ergm() drops the NA dyads and fits the
+# logistic regression on the 116 observed ones -- the SAME strictly-convex
+# problem ERGM.jl's available-case MPLE solves. No Monte Carlo on either
+# side; the only difference is optimizer termination (R IRLS ~1e-8, ERGM.jl
+# Newton-Raphson 1e-8). 1e-6 is well inside both. If this fails it is a
+# BUG -- do not loosen it.
+di_coefficients = 1e-6
+di_std_errors = 1e-6
+#
+# DYAD-DEPENDENT MISSING-DATA MCMLE. Read `mcmle_seed_sd` in [values]: R
+# refitting this model under five further seeds and disagreeing with itself.
+# No cross-implementation tolerance can honestly sit below that width.
+# Measured: seed-to-seed sd of the coefficients 0.00281, 0.00529;
+# of the standard errors 0.00398, 0.00312. The frozen fit at
+# seed 20260909 sits 3.03, 1.37 sds (edges, gwesp) from R's own five-seed mean.
+#
+# The Julia side compares the MEAN of five ERGM.jl `missing=:mle` fits at
+# declared seeds (MC error sd/sqrt(5)) against the frozen R fit.
+# 0.03 is >= 5x the largest measured coefficient seed sd (0.0265) -- the script
+# refuses to emit the fixture otherwise -- and it is a small fraction of the
+# fitted standard errors (0.385, 0.279), so a discrepancy large enough to
+# move a published conclusion cannot hide under it.
+dd_coefficients = 0.03
+dd_std_errors = 0.03
+
+[values]
+# --- (a) observed graph with NA dyads absent, deterministic --------------
+summary_statistic_names = ["edges", "nodecov.wealth", "gwesp.fixed.0.5"]
+summary_statistics = [18, 1999, 8.3934693402873677]
+n_observed_dyads = 116
+
+# --- (b) dyad-independent: available-case MLE, compared at 1e-6 ---------
+di_terms = ["edges", "nodecov.wealth"]
+di_coefficients = [-2.7539225280562398, 0.011207820424568339]
+di_std_errors = [0.56304082206602546, 0.00480355030400079]
+di_loglik = -47.369780881136371
+di_aic = 98.739561762272743
+
+# --- (c) dyad-dependent: missing-data MCMLE, vs measured MC width --------
+dd_terms = ["edges", "gwesp.fixed.0.5"]
+dd_coefficients = [-1.910743942989664, 0.21301043129907238]
+dd_std_errors = [0.38455592245206516, 0.27858462298478653]
+dd_mcmc_percent = [0, 0]
+
+# ergm disagreeing with ITSELF across five further seeds: the Monte-Carlo
+# floor under every dyad-dependent tolerance above.
+mcmle_seed_sd = [0.0028142165346853325, 0.0052938568764491966]
+mcmle_seed_sd_std_errors = [0.0039830743222679594, 0.0031159285414125129]
+mcmle_seed_mean = [-1.919278554869704, 0.22024689335411254]
+mcmle_seed_min = [-1.9222185583077758, 0.21339448287960025]
+mcmle_seed_max = [-1.9154377727488421, 0.22623269359750034]

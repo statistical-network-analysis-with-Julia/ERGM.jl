@@ -1,0 +1,32 @@
+name = "curved_ergm"
+
+[provenance]
+r_version = "4.6.1"
+ergm_version = "4.12.0"
+seed = 20261002
+script = "test/fixtures/r/curved_ergm.R"
+date = "2026-10-02"
+model = "faux.mesa.high ~ edges + nodematch(\"Grade\") + nodematch(\"Race\") + gwesp(0.25, fixed=FALSE); control.ergm(seed=s, init=c(-6.41, 1.99, 0.29, 1.45, 0.25))"
+seeds_tried = "20261002,101,202,303,404,505,606,707,808,909"
+seeds_finished = "101,202,303,404,505,606,707,808,909"
+
+[tolerance]
+# One ERGM.jl curved MCMLE fit against the mean of R's finished fits, per
+# coefficient: 4*sqrt(sd_R^2 + sd_R^2/k) floored at a tenth of R's standard
+# error (the rule of mcmle_ergm.toml), emitted as coef_tolerance; standard
+# errors by the same rule on R's SE seed sd, doubled (a curved fit's
+# information matrix is estimated from the final sample alone). The
+# log-likelihood: within 4 of R's seed sds of R's mean (two bridges).
+loglik_sd_multiple = 4
+
+[values]
+terms = ["edges", "nodematch.Grade", "nodematch.Race", "gwesp", "gwesp.decay"]
+n_finished = 9
+coef_mean = [-6.3637950578170024, 1.9701272948727127, 0.27175450446453986, 1.3472813370354508, 0.38286780489684002]
+coef_seed_sd = [0.0043382942764938499, 0.005372350400210545, 0.0041571897429699689, 0.0035738291457262832, 0.0029907600222373099]
+se_mean = [0.16031822044291943, 0.17089335469536288, 0.1180262971161382, 0.13421113982318433, 0.10415693005771635]
+se_seed_sd = [0.0020440771482839121, 0.0026981486777302079, 0.0017167098589890683, 0.0012874532172818494, 0.0023509221276364531]
+coef_tolerance = [0.018291854765057125, 0.022651818204243279, 0.017528251004366745, 0.015068586758385159, 0.012610151473660975]
+se_tolerance = [0.032063644088583886, 0.034178670939072578, 0.02360525942322764, 0.026842227964636867, 0.020831386011543274]
+loglik_mean = -867.76152824180042
+loglik_seed_sd = 0.62235607564924766
